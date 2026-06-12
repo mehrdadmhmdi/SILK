@@ -98,6 +98,9 @@ counter         <- 0L
 cat("\n=== ", K, "-fold cross-validation ===\n")
 cat("Methods:", paste(METHOD_LIST, collapse = ", "), "\n")
 cat("Horizons:", paste(HORIZONS, collapse = ", "), "years\n\n")
+cat("SILK kernel:", silk_opt("REGISTRATION_KERNEL"),
+    "| approximation:", silk_opt("REGISTRATION_KERNEL_APPROX"),
+    "| RFF dim:", silk_opt("KERNEL_RFF_DIM"), "\n\n")
 
 for (ff in seq_len(K)) {
   cat("── Fold", ff, "/", K, "──\n")
@@ -134,6 +137,10 @@ for (ff in seq_len(K)) {
         },
         "SILK" = fit_silk(train_s, train_v,
                           shift_range = MACS_SHIFT_RANGE,
+                          kernel = silk_opt("REGISTRATION_KERNEL"),
+                          kernel_approx = silk_opt("REGISTRATION_KERNEL_APPROX"),
+                          rff_dim = silk_opt("KERNEL_RFF_DIM"),
+                          rff_seed = silk_opt("KERNEL_RFF_SEED"),
                           seed = 42L + ff)
       )
       list(ok = TRUE, value = fit)

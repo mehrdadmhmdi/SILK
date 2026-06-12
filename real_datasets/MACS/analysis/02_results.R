@@ -179,11 +179,22 @@ if (length(key_h) > 0) {
 # ── 8. Figure 4: SILK registration — estimated shifts ───────────────────────
 cat("\nRunning full-data SILK registration for shift visualization...\n")
 visits_full <- macs_to_silk_visits(read.csv(file.path(DATA_DIR, "macs_visits.csv")))
-full_grid   <- make_shift_grid(SCENARIO_NAME)
+full_grid   <- seq(MACS_SHIFT_RANGE[1], MACS_SHIFT_RANGE[2],
+                   by = silk_opt("SHIFT_GRID_STEP"))
+kernel_config <- SILK:::registration_kernel_config(
+  kernel = silk_opt("REGISTRATION_KERNEL"),
+  approximation = silk_opt("REGISTRATION_KERNEL_APPROX"),
+  rff_dim = silk_opt("KERNEL_RFF_DIM"),
+  rff_seed = silk_opt("KERNEL_RFF_SEED")
+)
+cat("  Kernel:", kernel_config$kernel,
+    "| approximation:", kernel_config$approximation,
+    "| RFF dim:", kernel_config$rff_dim, "\n")
 
 full_reg <- tryCatch(
   SILK:::fit_registration_multistart(visits_full, subjects, feature_type = "silk",
-                               grid = full_grid, seed = 42L),
+                               grid = full_grid, seed = 42L,
+                               kernel_config = kernel_config),
   error = function(e) { cat("Registration failed:", conditionMessage(e), "\n"); NULL }
 )
 
