@@ -2,6 +2,8 @@
 # 01_analysis.R
 # 5-fold CV risk prediction on MACS PDS: SILK vs Landmark Cox vs MMLM
 # =============================================================================
+library(SILK)
+
 
 macs_current_script_dir <- function(default = getwd()) {
   frames <- sys.frames()
