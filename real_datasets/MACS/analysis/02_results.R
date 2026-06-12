@@ -3,28 +3,7 @@
 # Evaluate CV predictions and produce tables + figures
 # =============================================================================
 
-macs_current_script_dir <- function(default = getwd()) {
-  frames <- sys.frames()
-  for (ii in rev(seq_along(frames))) {
-    ofile <- frames[[ii]]$ofile
-    if (!is.null(ofile) && nzchar(ofile)) {
-      ofile_norm <- tryCatch(
-        normalizePath(ofile, winslash = "/", mustWork = TRUE),
-        error = function(e) normalizePath(basename(ofile), winslash = "/", mustWork = TRUE)
-      )
-      return(dirname(ofile_norm))
-    }
-  }
-  args <- commandArgs(trailingOnly = FALSE)
-  file_arg <- grep("^--file=", args, value = TRUE)
-  if (length(file_arg)) {
-    return(normalizePath(dirname(sub("^--file=", "", file_arg[1])),
-                         winslash = "/", mustWork = TRUE))
-  }
-  normalizePath(default, winslash = "/", mustWork = TRUE)
-}
-
-source(file.path(macs_current_script_dir(), "00_setup.R"), chdir = TRUE)
+source("00_setup.R")
 library(ggplot2)
 
 # ── 1. Load predictions ─────────────────────────────────────────────────────
@@ -172,11 +151,11 @@ for (method in unique(pred_atrisk$method)) {
     }
   }
 }
-cal_df <- if (length(cal_list)) do.call(rbind, cal_list) else data.frame()
+cal_df <- do.call(rbind, cal_list)
 
 key_h <- c(2, 5)
 key_h <- key_h[key_h %in% cal_df$horizon]
-if (length(key_h) > 0 && nrow(cal_df) > 0) {
+if (length(key_h) > 0) {
   cal_sub <- cal_df[cal_df$horizon %in% key_h, ]
   cal_sub$horizon_label <- paste0("Horizon = ", cal_sub$horizon, " yr")
 
@@ -184,7 +163,7 @@ if (length(key_h) > 0 && nrow(cal_df) > 0) {
                               color = method_label, shape = method_label)) +
     geom_abline(slope=1, intercept=0, linetype="dashed", color="grey40") +
     geom_point(size = 2.5) + geom_line(linewidth = 0.8) +
-    facet_wrap(~ horizon_label) +
+    facet_wrap(~ horizon_label, scales = "free") +
     scale_color_manual(values = method_colors) +
     coord_equal() +
     labs(x = "Predicted Risk", y = "Observed Proportion",
@@ -198,19 +177,20 @@ if (length(key_h) > 0 && nrow(cal_df) > 0) {
 }
 
 # ── 8. Figure 4: SILK registration — estimated shifts ───────────────────────
-cat("\nBuilding SILK shift visualization from cross-validated predictions...\n")
-silk_stage <- predictions[predictions$method == "SILK",
-                          c("subject_id", "landmark", "fold_id")]
-silk_stage <- silk_stage[!duplicated(silk_stage$subject_id), , drop = FALSE]
+cat("\nRunning full-data SILK registration for shift visualization...\n")
+visits_full <- macs_to_silk_visits(read.csv(file.path(DATA_DIR, "macs_visits.csv")))
+full_grid   <- make_shift_grid(SCENARIO_NAME)
 
-if (nrow(silk_stage) > 0) {
-  shift_df <- merge(
-    silk_stage,
-    subjects[, c("id", "A_obs")],
-    by.x = "subject_id", by.y = "id"
-  )
-  shift_df$S_hat <- shift_df$landmark
-  shift_df$e_hat <- shift_df$A_obs - shift_df$S_hat
+full_reg <- tryCatch(
+  SILK:::fit_registration_multistart(visits_full, subjects, feature_type = "silk",
+                               grid = full_grid, seed = 42L),
+  error = function(e) { cat("Registration failed:", conditionMessage(e), "\n"); NULL }
+)
+
+if (!is.null(full_reg)) {
+  shift_df <- data.frame(id = full_reg$ids, e_hat = full_reg$e_train)
+  shift_df <- merge(shift_df, subjects[, c("id","A_obs")], by = "id")
+  shift_df$S_hat <- shift_df$A_obs - shift_df$e_hat
   write.csv(shift_df, file.path(RESULTS_DIR, "macs_silk_shifts.csv"), row.names=FALSE)
 
   p4a <- ggplot(shift_df, aes(x = e_hat)) +
@@ -234,8 +214,6 @@ if (nrow(silk_stage) > 0) {
   ggsave(file.path(FIGURES_DIR, "fig4a_shift_distribution.png"), p4a, width=7, height=4.5, dpi=300)
   ggsave(file.path(FIGURES_DIR, "fig4b_calibrated_landmark.pdf"), p4b, width=6, height=5.5, dpi=600)
   ggsave(file.path(FIGURES_DIR, "fig4b_calibrated_landmark.png"), p4b, width=6, height=5.5, dpi=300)
-} else {
-  cat("No SILK prediction rows were available; skipping Figure 4.\n")
 }
 
 # ── 9. Figure 5: KM by SILK risk group ──────────────────────────────────────
@@ -244,15 +222,12 @@ silk_pred <- pred_atrisk[pred_atrisk$method == "SILK" &
                          pred_atrisk$horizon == target_h, ]
 
 if (nrow(silk_pred) > 30) {
-  risk_breaks <- unique(quantile(silk_pred$risk_pred, c(0, 1/3, 2/3, 1),
-                                 na.rm = TRUE))
-  if (length(risk_breaks) >= 4L) {
-    silk_pred$risk_group <- cut(
-      silk_pred$risk_pred,
-      breaks = risk_breaks,
-      labels = c("Low Risk", "Medium Risk", "High Risk"),
-      include.lowest = TRUE
-    )
+  silk_pred$risk_group <- cut(
+    silk_pred$risk_pred,
+    breaks = quantile(silk_pred$risk_pred, c(0, 1/3, 2/3, 1)),
+    labels = c("Low Risk", "Medium Risk", "High Risk"),
+    include.lowest = TRUE
+  )
   km_data <- merge(silk_pred[, c("subject_id","risk_group")],
                    subjects, by.x = "subject_id", by.y = "id")
   km_data <- km_data[!duplicated(km_data$subject_id), ]
@@ -275,11 +250,6 @@ if (nrow(silk_pred) > 30) {
   lr <- survival::survdiff(survival::Surv(U, delta) ~ risk_group, data = km_data)
   cat("\nLog-rank test for SILK risk stratification:\n")
   print(lr)
-  } else {
-    cat("SILK risk predictions had too few distinct values for KM strata.\n")
-  }
-} else {
-  cat("Not enough SILK prediction rows for KM risk-strata figure.\n")
 }
 
 # ── 10. Final report ────────────────────────────────────────────────────────
