@@ -151,20 +151,29 @@ for (method in unique(pred_atrisk$method)) {
     }
   }
 }
-cal_df <- do.call(rbind, cal_list)
+cal_df <- if (length(cal_list)) {
+  do.call(rbind, cal_list)
+} else {
+  data.frame(method_label = character(), horizon = numeric(),
+             mean_pred = numeric(), obs_rate = numeric())
+}
 
 key_h <- c(2, 5)
 key_h <- key_h[key_h %in% cal_df$horizon]
 if (length(key_h) > 0) {
   cal_sub <- cal_df[cal_df$horizon %in% key_h, ]
   cal_sub$horizon_label <- paste0("Horizon = ", cal_sub$horizon, " yr")
+  cal_axis_max <- max(cal_sub$mean_pred, cal_sub$obs_rate, 0, na.rm = TRUE)
+  cal_axis_max <- min(1, max(0.05, 1.05 * cal_axis_max))
 
   p3 <- ggplot(cal_sub, aes(x = mean_pred, y = obs_rate,
                               color = method_label, shape = method_label)) +
     geom_abline(slope=1, intercept=0, linetype="dashed", color="grey40") +
     geom_point(size = 2.5) + geom_line(linewidth = 0.8) +
-    facet_wrap(~ horizon_label, scales = "free") +
+    facet_wrap(~ horizon_label) +
     scale_color_manual(values = method_colors) +
+    scale_x_continuous(limits = c(0, cal_axis_max)) +
+    scale_y_continuous(limits = c(0, cal_axis_max)) +
     coord_equal() +
     labs(x = "Predicted Risk", y = "Observed Proportion",
          color = "Method", shape = "Method",
