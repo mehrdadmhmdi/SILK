@@ -25,8 +25,9 @@ fit_silk(train_subjects, train_visits, shift_grid = NULL, seed = NULL,
   \item{kernel}{Registration kernel. One of \code{"rbf"}, \code{"matern"},
   \code{"polynomial"}, or \code{"linear"}. Defaults to
   \code{silk_opt("REGISTRATION_KERNEL")}.}
-  \item{kernel_approx}{Kernel approximation. Use \code{"exact"} or
-  \code{"rff"}. RFF is available for RBF and Matern kernels.}
+  \item{kernel_approx}{Kernel approximation. Use \code{"exact"} (or
+  \code{"none"}) for the full kernel calculation, or \code{"rff"} for
+  random Fourier features. RFF is available for RBF and Matern kernels.}
   \item{rff_dim}{Number of random Fourier features when
   \code{kernel_approx = "rff"}.}
   \item{rff_seed}{Integer or NULL. Random seed for RFF basis generation.}
@@ -41,5 +42,7 @@ fit <- fit_silk(dat$subjects, dat$visits, shift_range = c(-12, 12), seed = 1)
 fit_fast <- fit_silk(dat$subjects, dat$visits, shift_range = c(-12, 12),
                      kernel = "rbf", kernel_approx = "rff",
                      rff_dim = 512, seed = 1)
+fit_exact <- fit_silk(dat$subjects, dat$visits, shift_range = c(-12, 12),
+                      kernel = "rbf", kernel_approx = "none", seed = 1)
 }
 }

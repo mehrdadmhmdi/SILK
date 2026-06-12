@@ -59,8 +59,9 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' @param kernel Registration kernel. One of \code{"rbf"}, \code{"matern"},
 #'   \code{"polynomial"}, or \code{"linear"}. Defaults to
 #'   \code{silk_opt("REGISTRATION_KERNEL")}.
-#' @param kernel_approx Kernel approximation. Use \code{"exact"} or
-#'   \code{"rff"}. RFF is available for RBF and Matern kernels.
+#' @param kernel_approx Kernel approximation. Use \code{"exact"} (or
+#'   \code{"none"}) for the full kernel calculation, or \code{"rff"} for
+#'   random Fourier features. RFF is available for RBF and Matern kernels.
 #' @param rff_dim Number of random Fourier features when
 #'   \code{kernel_approx = "rff"}.
 #' @param rff_seed Integer or NULL. Random seed for RFF basis generation.

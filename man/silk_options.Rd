@@ -12,10 +12,11 @@
 \details{
   Registration kernel options include \code{REGISTRATION_KERNEL}
   (\code{"rbf"}, \code{"matern"}, \code{"polynomial"}, or \code{"linear"}),
-  \code{REGISTRATION_KERNEL_APPROX} (\code{"exact"} or \code{"rff"}),
-  \code{KERNEL_RFF_DIM}, \code{KERNEL_RFF_SEED}, \code{KERNEL_MATERN_NU},
-  and polynomial-kernel controls. RFF acceleration is available for RBF and
-  Matern registration kernels.
+  \code{REGISTRATION_KERNEL_APPROX} (\code{"exact"}, \code{"none"}, or
+  \code{"rff"}), \code{KERNEL_RFF_DIM}, \code{KERNEL_RFF_SEED},
+  \code{KERNEL_MATERN_NU}, and polynomial-kernel controls. \code{"none"} is
+  accepted as an alias for exact calculation. RFF acceleration is available for
+  RBF and Matern registration kernels.
 }
 \usage{
 silk_opt(name)
@@ -42,4 +43,8 @@ silk_options(SHIFT_GRID_STEP = 0.2)
 silk_options(REGISTRATION_KERNEL = "rbf",
              REGISTRATION_KERNEL_APPROX = "rff",
              KERNEL_RFF_DIM = 512)
+
+# Use the full exact kernel calculation
+silk_options(REGISTRATION_KERNEL = "rbf",
+             REGISTRATION_KERNEL_APPROX = "none")
 }

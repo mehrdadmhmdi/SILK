@@ -27,6 +27,13 @@ test_data  <- generate_dataset_fixed(n = 200, scenario_name = "mean_moderate", s
 fit <- fit_silk(train_data$subjects, train_data$visits,
                 shift_range = c(-12, 12), seed = 1)
 
+# Exact kernel calculation is the default. It can also be requested explicitly
+# with kernel_approx = "exact" or kernel_approx = "none".
+fit_exact <- fit_silk(train_data$subjects, train_data$visits,
+                      shift_range = c(-12, 12),
+                      kernel = "rbf", kernel_approx = "none",
+                      seed = 1)
+
 # Fast large-sample fit with random Fourier features
 fit_fast <- fit_silk(train_data$subjects, train_data$visits,
                      shift_range = c(-12, 12),
@@ -91,8 +98,10 @@ silk_opt("SHIFT_GRID_STEP")
 # Change registration grid resolution
 silk_options(SHIFT_GRID_STEP = 0.1, N_FOLDS = 10)
 
-# Choose the registration kernel and optional RFF acceleration.
+# Choose the registration kernel and approximation.
 # Kernels: "rbf", "matern", "polynomial", "linear".
+# Exact calculation: REGISTRATION_KERNEL_APPROX = "exact" or "none".
+# RFF acceleration: REGISTRATION_KERNEL_APPROX = "rff".
 silk_options(REGISTRATION_KERNEL = "matern",
              REGISTRATION_KERNEL_APPROX = "rff",
              KERNEL_RFF_DIM = 512,
