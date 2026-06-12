@@ -1,0 +1,11 @@
+INPUT
+/*   SAS input statements for   */
+/* MACS Public Data Set: Neopterin (File Name=NEOPTRIN.DAT) */
+         CASEID     1-5
+         VISIT      6-8
+         DATNEmm    9-10
+         DATNEyy    11-14
+         NEOP1      15-20
+         NEOP2      21-26
+         NEOP3      27-32
+;

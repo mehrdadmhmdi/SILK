@@ -1,0 +1,34 @@
+/*   SAS input statements for   */
+/* NP Form 7: Baseline - SUMMARY FILE, ALL VISITS */
+INPUT
+         FORM       1-2
+         CASEID     3-7
+         VISIT      8-10
+         WAVEN      11-12
+         DTM07      13-14
+         DTY07      15-18
+         BORNY      19-22
+         EDUCY      23-24
+         EDAGE      25-26
+         HANDD      27
+         HANDL      28
+         HANDS      29-30
+         WRIST      31
+         HXLEA      32
+         HXLOC      33
+         NLANG      34
+         AGENG      35-36
+         RACE       37
+         PHYLI      38
+         SHH2A      39-40
+         SHH2B      41-42
+         SHH2C      43-45
+         SHH2D      46-48
+         SHH2E      49-51
+         SHHM       52-53
+         SHHD       54-55
+         SHHY       56-59
+         SHHWN      60-62
+         NPF08      63
+         NPF10      64
+;

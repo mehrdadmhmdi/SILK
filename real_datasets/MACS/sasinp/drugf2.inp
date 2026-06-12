@@ -1,0 +1,22 @@
+INPUT
+/*   SAS input statements for   */
+/* MACS: AIDS Medication Questionnaire - Form II (Data file = DRUGF2.DAT) */
+         CASEID     1-5
+         VISIT      6-8
+         FORM       9-10
+         NAVQY      11-14
+         ACNF2      15-17
+         ACTF2      18
+         ANKF2      19
+         DGNAV      20-22
+         LNGNV      23-25
+         NAVNW      26
+         NAVQY      27-30
+         NAVSY      31-34
+         NVLGU      35
+         PLCF2      36
+         RESF2      37
+         RNWF2      38
+         TMNAV      39-40
+         TUNAV      41
+;

@@ -1,0 +1,18 @@
+INPUT
+/*   SAS input statements for   */
+/* MACS: NP Form 18             (Data File = NPF18.DAT) */
+         CASEID     1-5
+         VISIT      6-8
+         FORM       9-10
+         DTY18      11-14
+         SDPRS      15-16
+         SDRS       17-19
+         TMAMN      20-22
+         TMANE      23-24
+         TMANP      25-26
+         TMAPR      27-28
+         TMBMN      29-31
+         TMBNE      32-33
+         TMBNP      34-35
+         TMBPR      36-37
+;

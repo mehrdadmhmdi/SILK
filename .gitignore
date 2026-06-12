@@ -1,0 +1,23 @@
+results/
+sim codes/
+real_datasets/MWCCS
+real_datasets/WIHS
+git/
+
+# MACS real-data analysis
+real_datasets/MACS/raw_data/
+real_datasets/MACS/sasinp/
+real_datasets/MACS/codebook/
+real_datasets/MACS/MACS_Anlysis_code_example/
+real_datasets/MACS/macs_pds_variable_report.py
+real_datasets/MACS/MACS_PDS_Variable_Report.xlsx
+real_datasets/MACS/README_SILK_DATA.md
+real_datasets/MACS/readme.txt
+real_datasets/MACS/analysis/results/
+real_datasets/MACS/analysis/figures/
+
+# R workspace artifacts
+.RData
+.Rhistory
+*.RData
+*.Rhistory

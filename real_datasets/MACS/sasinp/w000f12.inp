@@ -1,0 +1,51 @@
+/*   SAS input statements for   */
+/* MACS Neuropsychological Testing, Baseline Form 12 (Data File=W00F12.DAT) */
+INPUT
+         FORM       1-2
+         CASEID     3-7
+         VISIT      8-10
+         WAVEN      11-12
+         DTM12      13-14
+         DTY12      15-18
+         LPNUM      19
+         CSFWB      20-23
+         CSFPO      24-26
+         CSFLY      27-29
+         CSFRB      30-33
+         CFLE4      34-36
+         CFLE3      37-39
+         CFLE2      40-42
+         CFGLU      43-45
+         CFPRO      46-48
+         CFOCB      49-50
+         CFMBP      51-53
+         CFIGG      54-56
+         CFALB      57-60
+         SERIG      61-64
+         SERAL      65-68
+         CFIGI      69-71
+         CFCRA      72-75
+         CVDRL      76
+         NWBC       77-81
+         NLYMP      82-84
+         LYMPN      85-89
+         NATYL      90-92
+         ATYLN      93-97
+         NCD3P      98-100
+         NCD3N      101-105
+         NCD4P      106-108
+         NCD4N      109-113
+         NCD8P      114-116
+         NCD8N      117-121
+         BLP24      122
+         CFP24      123
+         BLCAG      124
+         CFCAG      125
+         POLYM      126
+         HIVIG      127-130
+         LPSUM      131
+         RETES      132
+         RPRDL      133
+         RPDRT      134-136
+         FTAR       137
+;

@@ -1,0 +1,14 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^README\.md$
+^LICENSE\.md$
+^\.git$
+^\.gitignore$
+^\.gitattributes$
+^\.Rhistory$
+^\.RData$
+^real_datasets$
+^results$
+^sim codes$
+^simulation results$
+^SILK\.Rcheck$
