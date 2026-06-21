@@ -82,17 +82,28 @@ silk_options(
   UIUC_BLUE              = "#13294B",
   FIGURE_DPI             = 600,
   FIGURE_BASE_SIZE       = 14,
-  METHOD_ORDER = c("Landmark-Recorded", "MMLM-Recorded", "SILK"),
+  METHOD_ORDER = c(
+    "Landmark-Recorded", "Cox-SameFeature-Recorded", "MMLM-Recorded",
+    "SILK-MeanReg", "SILK-LinearMMD", "SILK"
+  ),
   METHOD_LABELS = c(
-    "Landmark-Recorded" = "Landmark Cox",
-    "MMLM-Recorded"     = "Mixed-Model Landmark",
-    "SILK"              = "SILK"
+    "Landmark-Recorded"        = "Landmark Cox",
+    "Cox-SameFeature-Recorded" = "Same-Feature Recorded Cox",
+    "MMLM-Recorded"            = "Mixed-Model Landmark",
+    "SILK-MeanReg"             = "Mean Registration",
+    "SILK-LinearMMD"           = "Linear-Kernel Registration",
+    "SILK"                     = "SILK"
   )
 )
 
 # ── Real-data registration grid ──────────────────────────────────────────────
 # This is only a candidate search range. It is not an assumed error scenario.
 MACS_SHIFT_RANGE <- c(-4, 4)
+MACS_FIXED_LANDMARKS <- c(1, 2, 3, 5)
+MACS_USE_FIXED_LANDMARKS <- !identical(
+  tolower(Sys.getenv("MACS_USE_FIXED_LANDMARKS", unset = "true")),
+  "false"
+)
 
 # ── Column-name mapping: MACS originals → SILK internals ────────────────────
 # The CSVs use descriptive MACS names; SILK functions expect generic names.
@@ -120,6 +131,42 @@ macs_to_silk_visits <- function(df) {
   names(df)[names(df) == "LEU2N"]       <- "B3"
   names(df)[names(df) == "LOG_VLOAD"]   <- "B4"
   df
+}
+
+macs_fixed_landmark_data <- function(subjects, visits, landmark_time) {
+  landmark_time <- as.numeric(landmark_time)[1]
+  total_time <- subjects$A_obs + subjects$U
+  eligible <- is.finite(total_time) & total_time > landmark_time
+  s <- subjects[eligible, , drop = FALSE]
+  total_time <- total_time[eligible]
+  if (!nrow(s)) {
+    return(list(subjects = s, visits = visits[FALSE, , drop = FALSE]))
+  }
+  s$U <- total_time - landmark_time
+  s$delta <- as.integer(s$delta == 1L)
+  s$A_obs <- landmark_time
+  v <- visits[visits$id %in% s$id & visits$A_obs_il <= landmark_time + 1e-8, , drop = FALSE]
+  if (nrow(v)) {
+    v$lag <- landmark_time - v$A_obs_il
+  }
+  keep_ids <- intersect(s$id, unique(v$id))
+  s <- s[s$id %in% keep_ids, , drop = FALSE]
+  v <- v[v$id %in% keep_ids, , drop = FALSE]
+  list(subjects = s, visits = v)
+}
+
+macs_landmark_sets <- function(subjects, visits) {
+  if (!isTRUE(MACS_USE_FIXED_LANDMARKS)) {
+    return(list(last_visit = list(subjects = subjects, visits = visits, landmark_time = NA_real_)))
+  }
+  out <- list()
+  for (tt in MACS_FIXED_LANDMARKS) {
+    nm <- paste0("fixed_", tt, "y")
+    z <- macs_fixed_landmark_data(subjects, visits, tt)
+    z$landmark_time <- tt
+    out[[nm]] <- z
+  }
+  out
 }
 
 cat("Setup complete.\n")

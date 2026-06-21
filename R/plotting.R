@@ -15,13 +15,19 @@ method_palette <- function() {
   UIUC_BLUE <- silk_opt("UIUC_BLUE")
   method_colours <- c(
     "Landmark-Recorded" = "#3B7A57",
+    "Cox-SameFeature-Recorded" = "#2E8B57",
     "MMLM-Recorded" = "#9467BD",
     "JM-Recorded" = "#8C564B",
     "Bayesian-Dynamic-Observed" = "#C44E52",
     "DeepSurv-Observed" = "#E377C2",
     "RSF-Observed" = "#17BECF",
     "TimeError-Integrated-Landmark" = "#2B8CBE",
+    "SILK-MeanReg" = "#FDB863",
+    "SILK-LinearMMD" = "#E08214",
     SILK = UIUC_ORANGE,
+    "Beran-Recorded" = "#A6CEE3",
+    "Beran-SILK" = "#FB9A99",
+    "Beran-Oracle-Latent-Age" = "#6A3D9A",
     "Oracle-Latent-Age" = UIUC_BLUE
   )
   labels <- pretty_method(METHOD_ORDER)

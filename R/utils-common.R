@@ -212,6 +212,82 @@ predict_residual_cox_risk <- function(model, x_new, horizons) {
   clip_probability(1 - exp(-H))
 }
 
+#' Fit a low-dimensional Beran residual-survival model
+#'
+#' Fits a Gaussian-kernel conditional Kaplan-Meier estimator for residual time.
+#' This is intended for low-dimensional state checks that mirror the theory.
+#'
+#' @param subjects Data frame with columns U and delta.
+#' @param state Numeric matrix of state variables.
+#' @param bandwidth Numeric bandwidth on standardized state coordinates.
+#' @return A fitted Beran model object.
+#' @export
+fit_beran_risk <- function(subjects, state, bandwidth = NULL) {
+  state <- as.matrix(state)
+  keep <- stats::complete.cases(state) &
+    is.finite(subjects$U) & is.finite(subjects$delta)
+  state <- state[keep, , drop = FALSE]
+  time <- as.numeric(subjects$U[keep])
+  status <- as.integer(subjects$delta[keep])
+  std <- standardize_matrix(state)
+  d <- max(1L, ncol(std$train))
+  n <- max(1L, nrow(std$train))
+  if (is.null(bandwidth)) {
+    bandwidth <- n^(-1 / (d + 4))
+  }
+  bandwidth <- as.numeric(bandwidth)[1]
+  if (!is.finite(bandwidth) || bandwidth <= 0) bandwidth <- n^(-1 / (d + 4))
+  list(
+    type = "beran",
+    time = time,
+    status = status,
+    state = std$train,
+    center = std$center,
+    scale = std$scale,
+    bandwidth = bandwidth,
+    km = fit_km_model(time, status)
+  )
+}
+
+#' Predict risk from a Beran residual-survival model
+#'
+#' @param model Fitted model from \code{fit_beran_risk}.
+#' @param state_new Numeric matrix of new state variables.
+#' @param horizons Numeric vector of prediction horizons.
+#' @return Matrix of predicted risks.
+#' @export
+predict_beran_risk <- function(model, state_new, horizons) {
+  state_new <- as.matrix(state_new)
+  if (!identical(model$type, "beran") || !nrow(model$state)) {
+    return(predict_km_risk(model$km, horizons, nrow(state_new)))
+  }
+  state_new <- apply_standardizer(state_new, model)
+  horizons <- as.numeric(horizons)
+  out <- matrix(NA_real_, nrow = nrow(state_new), ncol = length(horizons))
+  event_times <- sort(unique(model$time[model$status == 1L & model$time <= max(horizons)]))
+  h <- model$bandwidth
+  for (ii in seq_len(nrow(state_new))) {
+    z <- sweep(model$state, 2, state_new[ii, ], "-")
+    w <- exp(-0.5 * rowSums(z^2) / (h^2))
+    w[!is.finite(w)] <- 0
+    if (sum(w) <= 1e-10 || !length(event_times)) {
+      out[ii, ] <- predict_km_risk(model$km, horizons, 1L)
+      next
+    }
+    surv <- rep(1, length(horizons))
+    for (tt in event_times) {
+      denom <- sum(w[model$time >= tt])
+      numer <- sum(w[model$time == tt & model$status == 1L])
+      if (is.finite(denom) && denom > 1e-10) {
+        step <- pmin(pmax(1 - numer / denom, 0), 1)
+        surv[horizons >= tt] <- surv[horizons >= tt] * step
+      }
+    }
+    out[ii, ] <- 1 - surv
+  }
+  clip_probability(out)
+}
+
 #' @keywords internal
 fit_age_scale_cox <- function(subjects, start_age, x) {
   x <- as.matrix(x)
@@ -305,6 +381,22 @@ silk_history_covariates <- function(subjects, history_df, stage) {
   keep <- intersect(c("X1", "X2", current_names, "mean_B", "sd_B", "visit_count", "span"), names(hist))
   x <- as.matrix(hist[, keep, drop = FALSE])
   cbind(calibrated_landmark = stage, x)
+}
+
+#' @keywords internal
+recorded_same_feature_covariates <- function(subjects, visits) {
+  history <- make_history_features(subjects, visits)
+  silk_history_covariates(subjects, history, subjects$A_obs)
+}
+
+#' @keywords internal
+beran_state_covariates <- function(subjects, stage = NULL, include_x = TRUE) {
+  if (is.null(stage)) stage <- subjects$A_obs
+  x <- cbind(landmark_age = as.numeric(stage))
+  if (isTRUE(include_x)) {
+    x <- cbind(x, base_covariates(subjects))
+  }
+  x
 }
 
 #' @keywords internal

@@ -95,14 +95,20 @@ silk_default_options <- function() {
 
     # Methods
     METHODS = c(
-      "Landmark-Recorded", "MMLM-Recorded", "JM-Recorded",
+      "Landmark-Recorded", "Cox-SameFeature-Recorded",
+      "MMLM-Recorded", "JM-Recorded",
       "Bayesian-Dynamic-Observed", "DeepSurv-Observed", "RSF-Observed",
-      "TimeError-Integrated-Landmark", "SILK", "Oracle-Latent-Age"
+      "TimeError-Integrated-Landmark", "SILK-MeanReg", "SILK-LinearMMD",
+      "SILK", "Beran-Recorded", "Beran-SILK", "Beran-Oracle-Latent-Age",
+      "Oracle-Latent-Age"
     ),
     METHOD_ORDER = c(
-      "Landmark-Recorded", "MMLM-Recorded", "JM-Recorded",
+      "Landmark-Recorded", "Cox-SameFeature-Recorded",
+      "MMLM-Recorded", "JM-Recorded",
       "Bayesian-Dynamic-Observed", "DeepSurv-Observed", "RSF-Observed",
-      "TimeError-Integrated-Landmark", "SILK", "Oracle-Latent-Age"
+      "TimeError-Integrated-Landmark", "SILK-MeanReg", "SILK-LinearMMD",
+      "SILK", "Beran-Recorded", "Beran-SILK", "Beran-Oracle-Latent-Age",
+      "Oracle-Latent-Age"
     ),
 
     SURVIVAL_HISTORY_BIOMARKERS = 3L,
@@ -176,13 +182,19 @@ silk_default_options <- function() {
 
     METHOD_LABELS = c(
       "Landmark-Recorded" = "Landmark",
+      "Cox-SameFeature-Recorded" = "Same-Feature Recorded Cox",
       "MMLM-Recorded" = "Mixed-Model Landmark",
       "JM-Recorded" = "Joint Model",
       "Bayesian-Dynamic-Observed" = "Bayesian Dynamic Updating",
       "DeepSurv-Observed" = "DeepSurv",
       "RSF-Observed" = "Survival Forest",
       "TimeError-Integrated-Landmark" = "MI Back-Calculated Landmark",
+      "SILK-MeanReg" = "Mean Registration",
+      "SILK-LinearMMD" = "Linear-Kernel Registration",
       SILK = "SILK",
+      "Beran-Recorded" = "Beran Recorded",
+      "Beran-SILK" = "Beran SILK",
+      "Beran-Oracle-Latent-Age" = "Beran Oracle",
       "Oracle-Latent-Age" = "Oracle Latent Age"
     ),
 

@@ -49,6 +49,23 @@ metrics <- evaluate_prediction_frame(predictions)
 metrics$summary
 ```
 
+## Comparators and Diagnostics
+
+The package includes the manuscript comparators used to separate calibration
+from ordinary history modeling. `fit_same_feature_recorded_cox()` fits a Cox
+model with the same history features as SILK but evaluated at the recorded
+landmark age, while `fit_silk(..., feature_type = "mean")` fits the mean-only
+registration comparator. `fit_beran_risk()` and `predict_beran_risk()` provide
+kernel conditional Kaplan-Meier/Beran risks for recorded, SILK-calibrated, or
+oracle latent-state inputs.
+
+Registration fits carry profile-gap diagnostics (`gap`, `gap_q1`, and
+`gap_q2`) so weakly identified shift profiles can be flagged instead of treated
+as routine successes. The MACS analysis scripts use fixed prospective
+landmarks at 1, 2, 3, and 5 years after seroconversion and write
+`macs_profile_diagnostics.csv` plus a summarized
+`macs_profile_gap_summary.csv`.
+
 ## Simulation Scenarios
 
 SILK ships with 12 simulation scenarios for `generate_dataset_fixed()`.

@@ -56,6 +56,9 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' @param shift_range Numeric vector of length two giving the lower and upper
 #'   candidate shift values. Defaults to \code{DEFAULT_SHIFT_GRID_MIN} and
 #'   \code{DEFAULT_SHIFT_GRID_MAX}.
+#' @param feature_type Registration feature map. \code{"silk"} uses the
+#'   distributional SILK feature map; \code{"mean"} uses mean/path features.
+#' @param method Character label stored in prediction outputs.
 #' @param kernel Registration kernel. One of \code{"rbf"}, \code{"matern"},
 #'   \code{"polynomial"}, or \code{"linear"}. Defaults to
 #'   \code{silk_opt("REGISTRATION_KERNEL")}.
@@ -73,10 +76,12 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' fit <- fit_silk(dat$subjects, dat$visits, shift_range = c(-12, 12), seed = 1)
 #' }
 fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NULL,
-                     shift_range = NULL,
+                     shift_range = NULL, feature_type = c("silk", "mean"),
+                     method = "SILK",
                      kernel = NULL, kernel_approx = NULL,
                      rff_dim = NULL, rff_seed = seed) {
   grid <- resolve_silk_shift_grid(shift_grid, shift_range)
+  feature_type <- match.arg(feature_type)
   kernel_config <- registration_kernel_config(
     kernel = kernel,
     approximation = kernel_approx,
@@ -85,7 +90,7 @@ fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NUL
   )
   cf <- crossfit_registration(
     train_visits, train_subjects,
-    feature_type = "silk",
+    feature_type = feature_type,
     grid = grid,
     seed = seed,
     kernel_config = kernel_config
@@ -95,15 +100,130 @@ fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NUL
   x <- silk_history_covariates(train_subjects, train_history, train_stage)
   risk_fit <- fit_residual_cox(train_subjects, x)
   list(
-    method = "SILK",
+    method = method,
     grid = grid,
     shift_grid = grid,
     shift_range = range(grid),
+    feature_type = feature_type,
     kernel = kernel_config,
     registration = cf,
     train_history = train_history,
     train_stage = train_stage,
     fit = risk_fit
+  )
+}
+
+#' Fit the same-feature recorded-age Cox comparator
+#'
+#' Uses the same biomarker-history feature vector as SILK but keeps recorded age.
+#'
+#' @param train_subjects Data frame of training subjects.
+#' @param train_visits Data frame of training visits.
+#' @return Fitted comparator object.
+#' @export
+fit_same_feature_recorded_cox <- function(train_subjects, train_visits) {
+  x <- recorded_same_feature_covariates(train_subjects, train_visits)
+  list(
+    method = "Cox-SameFeature-Recorded",
+    fit = fit_residual_cox(train_subjects, x)
+  )
+}
+
+#' Predict from the same-feature recorded-age Cox comparator
+#'
+#' @param fit Fitted object from \code{fit_same_feature_recorded_cox}.
+#' @param test_subjects Data frame of test subjects.
+#' @param test_visits Data frame of test visits.
+#' @param horizons Numeric vector of prediction horizons.
+#' @param fold_id Fold identifier.
+#' @param replicate_id Replicate identifier.
+#' @param n_train_setting Training-size label.
+#' @param time_grid_setting Time-grid label.
+#' @return A prediction frame.
+#' @export
+predict_same_feature_recorded_cox <- function(fit, test_subjects, test_visits,
+                                              horizons = NULL,
+                                              fold_id = 1L, replicate_id = 1L,
+                                              n_train_setting = NA,
+                                              time_grid_setting = NA) {
+  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
+  x <- recorded_same_feature_covariates(test_subjects, test_visits)
+  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
+  prediction_frame(
+    test_subjects,
+    landmark = test_subjects$A_obs,
+    horizons = horizons,
+    risk_mat = risk,
+    context = method_context(
+      fit$method, fold_id, replicate_id,
+      n_train_setting, time_grid_setting
+    )
+  )
+}
+
+#' @keywords internal
+fit_beran_recorded <- function(train_subjects) {
+  state <- beran_state_covariates(train_subjects, train_subjects$A_obs)
+  list(method = "Beran-Recorded", fit = fit_beran_risk(train_subjects, state))
+}
+
+#' @keywords internal
+predict_beran_recorded <- function(fit, test_subjects,
+                                   horizons = NULL,
+                                   fold_id = 1L, replicate_id = 1L,
+                                   n_train_setting = NA,
+                                   time_grid_setting = NA) {
+  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
+  state <- beran_state_covariates(test_subjects, test_subjects$A_obs)
+  risk <- predict_beran_risk(fit$fit, state, horizons)
+  prediction_frame(
+    test_subjects,
+    landmark = test_subjects$A_obs,
+    horizons = horizons,
+    risk_mat = risk,
+    context = method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
+  )
+}
+
+#' @keywords internal
+fit_beran_silk <- function(train_subjects, train_visits, shift_grid = NULL,
+                           shift_range = NULL, seed = NULL) {
+  grid <- resolve_silk_shift_grid(shift_grid, shift_range)
+  cf <- crossfit_registration(
+    train_visits, train_subjects,
+    feature_type = "silk",
+    grid = grid,
+    seed = seed,
+    kernel_config = registration_kernel_config()
+  )
+  train_stage <- cf$train_stage$S_hat[match(train_subjects$id, cf$train_stage$id)]
+  state <- beran_state_covariates(train_subjects, train_stage)
+  list(
+    method = "Beran-SILK",
+    grid = grid,
+    registration = cf,
+    fit = fit_beran_risk(train_subjects, state)
+  )
+}
+
+#' @keywords internal
+predict_beran_silk <- function(fit, test_subjects, test_visits,
+                               horizons = NULL,
+                               fold_id = 1L, replicate_id = 1L,
+                               n_train_setting = NA,
+                               time_grid_setting = NA) {
+  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
+  ps <- predict_registration_shift(fit$registration$final_template, test_visits, fit$grid)
+  stage <- test_subjects$A_obs[match(ps$id, test_subjects$id)] - ps$e_hat
+  stage <- stage[match(test_subjects$id, ps$id)]
+  state <- beran_state_covariates(test_subjects, stage)
+  risk <- predict_beran_risk(fit$fit, state, horizons)
+  prediction_frame(
+    test_subjects,
+    landmark = stage,
+    horizons = horizons,
+    risk_mat = risk,
+    context = method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
   )
 }
 
@@ -160,6 +280,12 @@ fit_oracle_latent_age <- function(train_subjects, train_visits) {
 }
 
 #' @keywords internal
+fit_beran_oracle_latent_age <- function(train_subjects) {
+  state <- beran_state_covariates(train_subjects, train_subjects$A_star)
+  list(method = "Beran-Oracle-Latent-Age", fit = fit_beran_risk(train_subjects, state))
+}
+
+#' @keywords internal
 predict_oracle_latent_age <- function(fit, test_subjects, test_visits,
                                       horizons = NULL,
                                       fold_id = 1L, replicate_id = 1L,
@@ -168,6 +294,27 @@ predict_oracle_latent_age <- function(fit, test_subjects, test_visits,
   if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
   x <- landmark_covariates(test_subjects, test_visits, clock = "latent")
   risk <- predict_residual_cox_risk(fit$fit, x, horizons)
+  prediction_frame(
+    test_subjects,
+    landmark = test_subjects$A_star,
+    horizons = horizons,
+    risk_mat = risk,
+    context = method_context(
+      fit$method, fold_id, replicate_id,
+      n_train_setting, time_grid_setting
+    )
+  )
+}
+
+#' @keywords internal
+predict_beran_oracle_latent_age <- function(fit, test_subjects,
+                                            horizons = NULL,
+                                            fold_id = 1L, replicate_id = 1L,
+                                            n_train_setting = NA,
+                                            time_grid_setting = NA) {
+  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
+  state <- beran_state_covariates(test_subjects, test_subjects$A_star)
+  risk <- predict_beran_risk(fit$fit, state, horizons)
   prediction_frame(
     test_subjects,
     landmark = test_subjects$A_star,

@@ -3,6 +3,8 @@
 # Core SILK
 export(fit_silk)
 export(predict_silk)
+export(fit_same_feature_recorded_cox)
+export(predict_same_feature_recorded_cox)
 
 # Data generation
 export(generate_dataset_fixed)
@@ -26,6 +28,8 @@ export(prediction_frame)
 export(clip_probability)
 export(fit_residual_cox)
 export(predict_residual_cox_risk)
+export(fit_beran_risk)
+export(predict_beran_risk)
 
 # Evaluation
 export(evaluate_prediction_frame)

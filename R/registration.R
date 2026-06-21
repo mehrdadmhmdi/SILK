@@ -661,7 +661,8 @@ crossfit_registration <- function(train_visits, train_subjects, feature_type = c
   nfold <- min(N_FOLDS, n)
   fold <- sample(rep(seq_len(nfold), length.out = n))
   out <- data.frame(id = ids, e_hat = NA_real_, S_hat = NA_real_, fold = fold,
-                    at_boundary = NA, gap_q1 = NA_real_, stringsAsFactors = FALSE)
+                    at_boundary = NA, gap_q1 = NA_real_, gap_q2 = NA_real_,
+                    stringsAsFactors = FALSE)
 
   for (ff in seq_len(nfold)) {
     fit_ids <- ids[fold != ff]
@@ -683,6 +684,7 @@ crossfit_registration <- function(train_visits, train_subjects, feature_type = c
     out$e_hat[ii] <- pred$e_hat
     out$at_boundary[ii] <- pred$at_boundary
     out$gap_q1[ii] <- pred$gap_q1
+    out$gap_q2[ii] <- pred$gap_q2
   }
 
   s_order <- match(out$id, train_subjects$id)

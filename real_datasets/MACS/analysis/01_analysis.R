@@ -49,7 +49,9 @@ cat("  Biomarkers:", paste(bio_columns(visits), collapse = ", "), "\n")
 
 real_prediction_frame <- function(test_subjects, landmark, horizons,
                                   risk_mat, method_name, fold_id = 1L,
-                                  n_train_setting = NA_integer_) {
+                                  n_train_setting = NA_integer_,
+                                  landmark_set = "last_visit",
+                                  landmark_time = NA_real_) {
   n <- nrow(test_subjects)
   H <- length(horizons)
   risk_mat <- as.matrix(risk_mat)
@@ -73,9 +75,11 @@ real_prediction_frame <- function(test_subjects, landmark, horizons,
         horizon = tau, method = method_name,
         risk_pred = clip_probability(risk_mat[i, h]),
         event_within_horizon = event_wh, at_risk = at_risk,
+        residual_time = U_i, event_status = delta_i,
+        landmark_set = landmark_set, landmark_time = landmark_time,
         fold_id = fold_id, replicate_id = 1L,
         n_train_setting = n_train_setting,
-        time_grid_setting = "macs_cv", stringsAsFactors = FALSE
+        time_grid_setting = paste0("macs_cv:", landmark_set), stringsAsFactors = FALSE
       )
       rr <- rr + 1L
     }
@@ -87,151 +91,246 @@ real_prediction_frame <- function(test_subjects, landmark, horizons,
 set.seed(2024)
 K           <- 5L
 HORIZONS    <- silk_opt("PREDICTION_HORIZONS")
-METHOD_LIST <- c("Landmark-Recorded", "MMLM-Recorded", "SILK")
+METHOD_LIST <- silk_opt("METHOD_ORDER")
+landmark_sets <- macs_landmark_sets(subjects, visits)
 
-ids   <- sort(unique(subjects$id))
-folds <- sample(rep(seq_len(K), length.out = length(ids)))
-names(folds) <- ids
+fit_macs_method <- function(method, train_s, train_v, fold_seed) {
+  switch(method,
+    "Landmark-Recorded" = {
+      x <- SILK:::landmark_covariates(train_s, train_v, clock = "recorded",
+                                      include_biomarker = FALSE)
+      list(method = method, fit = fit_residual_cox(train_s, x))
+    },
+    "Cox-SameFeature-Recorded" = fit_same_feature_recorded_cox(train_s, train_v),
+    "MMLM-Recorded" = {
+      mm <- SILK:::fit_current_value_mixed_model(train_s, train_v)
+      mh <- SILK:::predict_current_value_mixed_model(mm, train_s, train_v)
+      x  <- SILK:::landmark_covariates(train_s, train_v, clock = "recorded",
+                                       marker = mh)
+      list(method = method, marker_model = mm, fit = fit_residual_cox(train_s, x))
+    },
+    "SILK-MeanReg" = fit_silk(
+      train_s, train_v,
+      shift_range = MACS_SHIFT_RANGE,
+      feature_type = "mean",
+      method = "SILK-MeanReg",
+      kernel = silk_opt("REGISTRATION_KERNEL"),
+      kernel_approx = silk_opt("REGISTRATION_KERNEL_APPROX"),
+      rff_dim = silk_opt("KERNEL_RFF_DIM"),
+      rff_seed = silk_opt("KERNEL_RFF_SEED"),
+      seed = fold_seed
+    ),
+    "SILK-LinearMMD" = fit_silk(
+      train_s, train_v,
+      shift_range = MACS_SHIFT_RANGE,
+      feature_type = "silk",
+      method = "SILK-LinearMMD",
+      kernel = "linear",
+      kernel_approx = "exact",
+      seed = fold_seed
+    ),
+    "SILK" = fit_silk(
+      train_s, train_v,
+      shift_range = MACS_SHIFT_RANGE,
+      feature_type = "silk",
+      method = "SILK",
+      kernel = silk_opt("REGISTRATION_KERNEL"),
+      kernel_approx = silk_opt("REGISTRATION_KERNEL_APPROX"),
+      rff_dim = silk_opt("KERNEL_RFF_DIM"),
+      rff_seed = silk_opt("KERNEL_RFF_SEED"),
+      seed = fold_seed
+    ),
+    stop("Unknown MACS method: ", method, call. = FALSE)
+  )
+}
+
+silk_diagnostics <- function(fit, ps, fold_id, method, landmark_set, landmark_time) {
+  train_diag <- fit$registration$train_stage
+  train_diag$split <- "train_crossfit"
+  test_diag <- ps
+  test_diag$S_hat <- NA_real_
+  test_diag$fold <- fold_id
+  test_diag$split <- "test"
+  common <- intersect(names(train_diag), names(test_diag))
+  out <- rbind(train_diag[, common, drop = FALSE],
+               test_diag[, common, drop = FALSE])
+  out$fold_id <- fold_id
+  out$method <- method
+  out$landmark_set <- landmark_set
+  out$landmark_time <- landmark_time
+  out
+}
+
+predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
+                                n_train, landmark_set, landmark_time) {
+  if (identical(method, "Landmark-Recorded")) {
+    x <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded",
+                                    include_biomarker = FALSE)
+    risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+    return(list(
+      predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
+                                          method, fold_id, n_train,
+                                          landmark_set, landmark_time),
+      diagnostics = NULL
+    ))
+  }
+  if (identical(method, "Cox-SameFeature-Recorded")) {
+    pred <- predict_same_feature_recorded_cox(
+      fit, test_s, test_v, HORIZONS, fold_id = fold_id,
+      n_train_setting = n_train, time_grid_setting = paste0("macs_cv:", landmark_set)
+    )
+    pred$residual_time <- rep(test_s$U, each = length(HORIZONS))
+    pred$event_status <- rep(test_s$delta, each = length(HORIZONS))
+    pred$landmark_set <- landmark_set
+    pred$landmark_time <- landmark_time
+    return(list(predictions = pred, diagnostics = NULL))
+  }
+  if (identical(method, "MMLM-Recorded")) {
+    mh <- SILK:::predict_current_value_mixed_model(fit$marker_model, test_s, test_v)
+    x  <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded", marker = mh)
+    risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+    return(list(
+      predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
+                                          method, fold_id, n_train,
+                                          landmark_set, landmark_time),
+      diagnostics = NULL
+    ))
+  }
+
+  grid <- fit$grid
+  ps <- SILK:::predict_registration_shift(fit$registration$final_template, test_v, grid)
+  stage <- test_s$A_obs[match(ps$id, test_s$id)] - ps$e_hat
+  stage <- stage[match(test_s$id, ps$id)]
+  ps$S_hat <- test_s$A_obs[match(ps$id, test_s$id)] - ps$e_hat
+  hist <- make_history_features(test_s, test_v)
+  x <- SILK:::silk_history_covariates(test_s, hist, stage)
+  risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+  list(
+    predictions = real_prediction_frame(test_s, stage, HORIZONS, risk,
+                                        method, fold_id, n_train,
+                                        landmark_set, landmark_time),
+    diagnostics = silk_diagnostics(fit, ps, fold_id, method, landmark_set, landmark_time)
+  )
+}
 
 all_predictions <- list()
 all_status      <- list()
+all_diagnostics <- list()
 counter         <- 0L
+diag_counter    <- 0L
 
 cat("\n=== ", K, "-fold cross-validation ===\n")
 cat("Methods:", paste(METHOD_LIST, collapse = ", "), "\n")
+cat("Landmarks:", paste(names(landmark_sets), collapse = ", "), "\n")
 cat("Horizons:", paste(HORIZONS, collapse = ", "), "years\n\n")
 cat("SILK kernel:", silk_opt("REGISTRATION_KERNEL"),
     "| approximation:", silk_opt("REGISTRATION_KERNEL_APPROX"),
     "| RFF dim:", silk_opt("KERNEL_RFF_DIM"), "\n\n")
 
-for (ff in seq_len(K)) {
-  cat("── Fold", ff, "/", K, "──\n")
-  train_ids <- ids[folds != ff]
-  test_ids  <- ids[folds == ff]
-
-  train_s <- subjects[subjects$id %in% train_ids, ]
-  train_v <- visits[visits$id %in% train_ids, ]
-  test_s  <- subjects[subjects$id %in% test_ids, ]
-  test_v  <- visits[visits$id %in% test_ids, ]
-
-  cat("  Train:", nrow(train_s), "subj,", nrow(train_v), "visits |",
-      "Test:", nrow(test_s), "subj,", nrow(test_v), "visits\n")
-
-  for (method in METHOD_LIST) {
-    cat("  ", method, "... ")
-    t0 <- proc.time()[3]
-
-    # ── FIT ──
-    fit_res <- tryCatch({
-      fit <- switch(method,
-        "Landmark-Recorded" = {
-          x <- SILK:::landmark_covariates(train_s, train_v, clock = "recorded",
-                                   include_biomarker = FALSE)
-          list(method = method, fit = fit_residual_cox(train_s, x))
-        },
-        "MMLM-Recorded" = {
-          mm <- SILK:::fit_current_value_mixed_model(train_s, train_v)
-          mh <- SILK:::predict_current_value_mixed_model(mm, train_s, train_v)
-          x  <- SILK:::landmark_covariates(train_s, train_v, clock = "recorded",
-                                    marker = mh)
-          list(method = method, marker_model = mm,
-               fit = fit_residual_cox(train_s, x))
-        },
-        "SILK" = fit_silk(train_s, train_v,
-                          shift_range = MACS_SHIFT_RANGE,
-                          kernel = silk_opt("REGISTRATION_KERNEL"),
-                          kernel_approx = silk_opt("REGISTRATION_KERNEL_APPROX"),
-                          rff_dim = silk_opt("KERNEL_RFF_DIM"),
-                          rff_seed = silk_opt("KERNEL_RFF_SEED"),
-                          seed = 42L + ff)
-      )
-      list(ok = TRUE, value = fit)
-    }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
-
-    fit_time <- proc.time()[3] - t0
-
-    if (!fit_res$ok) {
-      cat("FIT FAILED (", fit_res$error, ")\n")
-      all_status[[paste0(ff, "_", method)]] <- data.frame(
-        fold = ff, method = method, fit_ok = FALSE, predict_ok = FALSE,
-        fit_time = fit_time, predict_time = NA, error = fit_res$error,
-        stringsAsFactors = FALSE)
-      next
-    }
-
-    # ── PREDICT ──
-    pred_t0 <- proc.time()[3]
-    pred_res <- tryCatch({
-      pred <- switch(method,
-        "Landmark-Recorded" = {
-          x <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded",
-                                   include_biomarker = FALSE)
-          risk <- predict_residual_cox_risk(fit_res$value$fit, x, HORIZONS)
-          real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
-                                method, fold_id = ff,
-                                n_train_setting = nrow(train_s))
-        },
-        "MMLM-Recorded" = {
-          mh <- SILK:::predict_current_value_mixed_model(fit_res$value$marker_model,
-                                                   test_s, test_v)
-          x  <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded",
-                                    marker = mh)
-          risk <- predict_residual_cox_risk(fit_res$value$fit, x, HORIZONS)
-          real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
-                                method, fold_id = ff,
-                                n_train_setting = nrow(train_s))
-        },
-        "SILK" = {
-          grid <- fit_res$value$grid
-          ps   <- SILK:::predict_registration_shift(
-                    fit_res$value$registration$final_template, test_v, grid)
-          stage <- test_s$A_obs[match(ps$id, test_s$id)] - ps$e_hat
-          stage <- stage[match(test_s$id, ps$id)]
-          hist  <- make_history_features(test_s, test_v)
-          x     <- SILK:::silk_history_covariates(test_s, hist, stage)
-          risk  <- predict_residual_cox_risk(fit_res$value$fit, x, HORIZONS)
-          real_prediction_frame(test_s, stage, HORIZONS, risk,
-                                method, fold_id = ff,
-                                n_train_setting = nrow(train_s))
-        }
-      )
-      list(ok = TRUE, value = pred)
-    }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
-
-    predict_time <- proc.time()[3] - pred_t0
-    cat(sprintf("%.1fs fit, %.1fs predict", fit_time, predict_time))
-
-    if (pred_res$ok) {
-      cat(" done\n")
-      counter <- counter + 1L
-      all_predictions[[counter]] <- pred_res$value
-    } else {
-      cat(" PREDICT FAILED (", pred_res$error, ")\n")
-    }
-
-    all_status[[paste0(ff, "_", method)]] <- data.frame(
-      fold = ff, method = method, fit_ok = TRUE,
-      predict_ok = pred_res$ok, fit_time = fit_time,
-      predict_time = predict_time,
-      error = if (!pred_res$ok) pred_res$error else "",
-      stringsAsFactors = FALSE)
+for (landmark_set in names(landmark_sets)) {
+  ldat <- landmark_sets[[landmark_set]]
+  set_subjects <- ldat$subjects
+  set_visits <- ldat$visits
+  landmark_time <- ldat$landmark_time
+  if (nrow(set_subjects) < K || length(unique(set_subjects$delta)) < 2L) {
+    cat("Skipping", landmark_set, "because the risk set is too small or has one outcome class\n")
+    next
   }
-  cat("\n")
+  ids <- sort(unique(set_subjects$id))
+  folds <- sample(rep(seq_len(K), length.out = length(ids)))
+  names(folds) <- ids
+  cat("\n── Landmark set:", landmark_set, "subjects:", length(ids), "visits:", nrow(set_visits), "──\n")
+
+  for (ff in seq_len(K)) {
+    cat("Fold", ff, "/", K, "\n")
+    train_ids <- ids[folds != ff]
+    test_ids  <- ids[folds == ff]
+
+    train_s <- set_subjects[set_subjects$id %in% train_ids, ]
+    train_v <- set_visits[set_visits$id %in% train_ids, ]
+    test_s  <- set_subjects[set_subjects$id %in% test_ids, ]
+    test_v  <- set_visits[set_visits$id %in% test_ids, ]
+
+    cat("  Train:", nrow(train_s), "subj,", nrow(train_v), "visits |",
+        "Test:", nrow(test_s), "subj,", nrow(test_v), "visits\n")
+
+    for (method in METHOD_LIST) {
+      cat("  ", method, "... ")
+      t0 <- proc.time()[3]
+      fit_res <- tryCatch(
+        list(ok = TRUE, value = fit_macs_method(method, train_s, train_v, 42L + ff)),
+        error = function(e) list(ok = FALSE, error = conditionMessage(e))
+      )
+      fit_time <- proc.time()[3] - t0
+      status_key <- paste(landmark_set, ff, method, sep = "_")
+
+      if (!fit_res$ok) {
+        cat("FIT FAILED (", fit_res$error, ")\n")
+        all_status[[status_key]] <- data.frame(
+          landmark_set = landmark_set, landmark_time = landmark_time,
+          fold = ff, method = method, fit_ok = FALSE, predict_ok = FALSE,
+          fit_time = fit_time, predict_time = NA, error = fit_res$error,
+          stringsAsFactors = FALSE)
+        next
+      }
+
+      pred_t0 <- proc.time()[3]
+      pred_res <- tryCatch(
+        list(ok = TRUE, value = predict_macs_method(
+          method, fit_res$value, test_s, test_v, ff, nrow(train_s),
+          landmark_set, landmark_time
+        )),
+        error = function(e) list(ok = FALSE, error = conditionMessage(e))
+      )
+      predict_time <- proc.time()[3] - pred_t0
+      cat(sprintf("%.1fs fit, %.1fs predict", fit_time, predict_time))
+
+      if (pred_res$ok) {
+        cat(" done\n")
+        counter <- counter + 1L
+        all_predictions[[counter]] <- pred_res$value$predictions
+        if (!is.null(pred_res$value$diagnostics)) {
+          diag_counter <- diag_counter + 1L
+          all_diagnostics[[diag_counter]] <- pred_res$value$diagnostics
+        }
+      } else {
+        cat(" PREDICT FAILED (", pred_res$error, ")\n")
+      }
+
+      all_status[[status_key]] <- data.frame(
+        landmark_set = landmark_set, landmark_time = landmark_time,
+        fold = ff, method = method, fit_ok = TRUE,
+        predict_ok = pred_res$ok, fit_time = fit_time,
+        predict_time = predict_time,
+        error = if (!pred_res$ok) pred_res$error else "",
+        stringsAsFactors = FALSE)
+    }
+    cat("\n")
+  }
 }
 
 # ── 4. Save ──────────────────────────────────────────────────────────────────
+if (!length(all_predictions)) {
+  stop("No MACS predictions were produced; inspect macs_method_status.csv")
+}
+
 predictions <- do.call(rbind, all_predictions)
 rownames(predictions) <- NULL
 status_df <- do.call(rbind, all_status)
 rownames(status_df) <- NULL
+diagnostics <- if (length(all_diagnostics)) do.call(rbind, all_diagnostics) else data.frame()
+if (nrow(diagnostics)) rownames(diagnostics) <- NULL
 
 write.csv(predictions, file.path(RESULTS_DIR, "macs_predictions.csv"),
           row.names = FALSE)
 write.csv(status_df, file.path(RESULTS_DIR, "macs_method_status.csv"),
           row.names = FALSE)
+write.csv(diagnostics, file.path(RESULTS_DIR, "macs_profile_diagnostics.csv"),
+          row.names = FALSE)
 
 cat("=== Cross-validation complete ===\n")
 cat("Predictions:", nrow(predictions), "rows\n")
+cat("Diagnostics:", nrow(diagnostics), "rows\n")
 cat("Saved to:   ", RESULTS_DIR, "\n\n")
 
 cat("Method status:\n")
