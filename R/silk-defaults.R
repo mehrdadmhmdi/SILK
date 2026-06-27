@@ -97,18 +97,18 @@ silk_default_options <- function() {
     METHODS = c(
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
       "MMLM-Recorded", "JM-Recorded",
-      "Bayesian-Dynamic-Observed", "DeepSurv-Observed", "RSF-Observed",
-      "TimeError-Integrated-Landmark", "SILK-MeanReg", "SILK-LinearMMD",
-      "SILK", "Beran-Recorded", "Beran-SILK", "Beran-Oracle-Latent-Age",
-      "Oracle-Latent-Age"
+      "RSF-Observed", "DeepSurv-Observed", "Bayesian-Dynamic-Observed",
+      "TimeError-Integrated-Landmark", "SILK", "SILK-LinearMMD",
+      "Beran-Recorded", "Beran-SILK", "Beran-SILK-Linear",
+      "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
     ),
     METHOD_ORDER = c(
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
       "MMLM-Recorded", "JM-Recorded",
-      "Bayesian-Dynamic-Observed", "DeepSurv-Observed", "RSF-Observed",
-      "TimeError-Integrated-Landmark", "SILK-MeanReg", "SILK-LinearMMD",
-      "SILK", "Beran-Recorded", "Beran-SILK", "Beran-Oracle-Latent-Age",
-      "Oracle-Latent-Age"
+      "RSF-Observed", "DeepSurv-Observed", "Bayesian-Dynamic-Observed",
+      "TimeError-Integrated-Landmark", "SILK", "SILK-LinearMMD",
+      "Beran-Recorded", "Beran-SILK", "Beran-SILK-Linear",
+      "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
     ),
 
     SURVIVAL_HISTORY_BIOMARKERS = 3L,
@@ -180,22 +180,24 @@ silk_default_options <- function() {
       irregular_missing = "Irregular Visits With Missing Data"
     ),
 
+    # Canonical architecture display names (registration x survival layer).
     METHOD_LABELS = c(
-      "Landmark-Recorded" = "Landmark",
-      "Cox-SameFeature-Recorded" = "Same-Feature Recorded Cox",
-      "MMLM-Recorded" = "Mixed-Model Landmark",
-      "JM-Recorded" = "Joint Model",
-      "Bayesian-Dynamic-Observed" = "Bayesian Dynamic Updating",
-      "DeepSurv-Observed" = "DeepSurv",
-      "RSF-Observed" = "Survival Forest",
-      "TimeError-Integrated-Landmark" = "MI Back-Calculated Landmark",
-      "SILK-MeanReg" = "Mean Registration",
-      "SILK-LinearMMD" = "Linear-Kernel Registration",
-      SILK = "SILK",
-      "Beran-Recorded" = "Beran Recorded",
-      "Beran-SILK" = "Beran SILK",
-      "Beran-Oracle-Latent-Age" = "Beran Oracle",
-      "Oracle-Latent-Age" = "Oracle Latent Age"
+      "Landmark-Recorded" = "Landmark-Recorded",
+      "Cox-SameFeature-Recorded" = "Recorded-Cox",
+      "MMLM-Recorded" = "MMLM-Recorded",
+      "JM-Recorded" = "JM-Recorded",
+      "RSF-Observed" = "RSF-Observed",
+      "DeepSurv-Observed" = "DeepSurv-Observed",
+      "Bayesian-Dynamic-Observed" = "Bayesian-Dynamic-Observed",
+      "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
+      SILK = "SILK-Gaussian-Cox",
+      "SILK-LinearMMD" = "SILK-Linear-Cox",
+      "Beran-Recorded" = "Recorded-Beran",
+      "Beran-SILK" = "SILK-Gaussian-Beran",
+      "Beran-SILK-Linear" = "SILK-Linear-Beran",
+      "Beran-Oracle-Latent-Age" = "Oracle-Beran",
+      "Oracle-Latent-Age" = "Oracle-Cox",
+      "SILK-MeanReg" = "SILK-MeanTraj (suppl.)"
     ),
 
     SCHEDULE_LABELS = c(
