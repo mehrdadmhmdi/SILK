@@ -94,6 +94,35 @@ HORIZONS    <- silk_opt("PREDICTION_HORIZONS")
 METHOD_LIST <- silk_opt("METHOD_ORDER")
 landmark_sets <- macs_landmark_sets(subjects, visits)
 
+# Extract an event-risk vector at target times from a JMbayes2 prediction object
+# (mirrors the simulation's JM-Recorded comparator).
+jm_event_risk <- function(pred, target_times) {
+  if (is.data.frame(pred)) {
+    df <- pred
+  } else if (is.list(pred)) {
+    dfs <- pred[vapply(pred, is.data.frame, logical(1))]
+    if (!length(dfs)) stop("JMbayes2 prediction did not return a data frame.", call. = FALSE)
+    df <- dfs[[1]]
+  } else stop("Unsupported JMbayes2 prediction object.", call. = FALSE)
+  time_col  <- intersect(c("times", "time", "Time", "A_obs_il"), names(df))
+  risk_cols <- grep("risk|event|cif|prob", names(df), ignore.case = TRUE, value = TRUE)
+  risk_cols <- risk_cols[vapply(df[risk_cols], is.numeric, logical(1))]
+  risk_cols <- setdiff(risk_cols, time_col)
+  if (!length(risk_cols)) {
+    num <- names(df)[vapply(df, is.numeric, logical(1))]
+    risk_cols <- setdiff(num, c(time_col, "id", "X1", "X2", "Y_obs", "status", "A_obs_il"))
+  }
+  if (!length(risk_cols)) stop("Could not identify the JMbayes2 event-risk column.", call. = FALSE)
+  risk <- as.numeric(df[[risk_cols[1]]])
+  if (length(time_col)) {
+    tt  <- as.numeric(df[[time_col[1]]])
+    out <- stats::approx(tt, risk, xout = target_times, rule = 2, ties = "ordered")$y
+  } else if (length(risk) >= length(target_times)) {
+    out <- tail(risk, length(target_times))
+  } else stop("JMbayes2 prediction did not include enough event-risk values.", call. = FALSE)
+  pmin(pmax(out, 0), 1)
+}
+
 fit_macs_method <- function(method, train_s, train_v, fold_seed) {
   switch(method,
     "Landmark-Recorded" = {
@@ -101,7 +130,6 @@ fit_macs_method <- function(method, train_s, train_v, fold_seed) {
                                       include_biomarker = FALSE)
       list(method = method, fit = fit_residual_cox(train_s, x))
     },
-    "Cox-SameFeature-Recorded" = fit_same_feature_recorded_cox(train_s, train_v),
     "MMLM-Recorded" = {
       mm <- SILK:::fit_current_value_mixed_model(train_s, train_v)
       mh <- SILK:::predict_current_value_mixed_model(mm, train_s, train_v)
@@ -109,17 +137,30 @@ fit_macs_method <- function(method, train_s, train_v, fold_seed) {
                                        marker = mh)
       list(method = method, marker_model = mm, fit = fit_residual_cox(train_s, x))
     },
-    "SILK-MeanReg" = fit_silk(
-      train_s, train_v,
-      shift_range = MACS_SHIFT_RANGE,
-      feature_type = "mean",
-      method = "SILK-MeanReg",
-      kernel = silk_opt("REGISTRATION_KERNEL"),
-      kernel_approx = silk_opt("REGISTRATION_KERNEL_APPROX"),
-      rff_dim = silk_opt("KERNEL_RFF_DIM"),
-      rff_seed = silk_opt("KERNEL_RFF_SEED"),
-      seed = fold_seed
-    ),
+    "JM-Recorded" = {
+      if (!requireNamespace("JMbayes2", quietly = TRUE))
+        stop("JM-Recorded requires the JMbayes2 package.", call. = FALSE)
+      mm <- SILK:::fit_current_value_mixed_model(train_s, train_v)
+      if (is.null(mm$fit))
+        stop("JM-Recorded could not fit the recorded-time longitudinal mixed model.",
+             call. = FALSE)
+      # Absolute event/censoring time on the recorded disease-age clock:
+      # landmark age plus residual follow-up (Y_obs = A_obs + U), status = delta.
+      event_dat <- data.frame(
+        id     = train_s$id,
+        Y_obs  = train_s$A_obs + train_s$U,
+        status = as.integer(train_s$delta),
+        X1     = train_s$X1,
+        X2     = train_s$X2
+      )
+      cox_fit <- survival::coxph(survival::Surv(Y_obs, status) ~ X1 + X2,
+                                 data = event_dat, x = TRUE)
+      jm_fit <- JMbayes2::jm(
+        cox_fit, mm$fit, time_var = "A_obs_il",
+        n_chains = JM_N_CHAINS, n_iter = JM_N_ITER, n_burnin = JM_N_BURNIN
+      )
+      list(method = method, marker_model = mm, cox_fit = cox_fit, jm_fit = jm_fit)
+    },
     "SILK-LinearMMD" = fit_silk(
       train_s, train_v,
       shift_range = MACS_SHIFT_RANGE,
@@ -174,21 +215,36 @@ predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
       diagnostics = NULL
     ))
   }
-  if (identical(method, "Cox-SameFeature-Recorded")) {
-    pred <- predict_same_feature_recorded_cox(
-      fit, test_s, test_v, HORIZONS, fold_id = fold_id,
-      n_train_setting = n_train, time_grid_setting = paste0("macs_cv:", landmark_set)
-    )
-    pred$residual_time <- rep(test_s$U, each = length(HORIZONS))
-    pred$event_status <- rep(test_s$delta, each = length(HORIZONS))
-    pred$landmark_set <- landmark_set
-    pred$landmark_time <- landmark_time
-    return(list(predictions = pred, diagnostics = NULL))
-  }
   if (identical(method, "MMLM-Recorded")) {
     mh <- SILK:::predict_current_value_mixed_model(fit$marker_model, test_s, test_v)
     x  <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded", marker = mh)
     risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+    return(list(
+      predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
+                                          method, fold_id, n_train,
+                                          landmark_set, landmark_time),
+      diagnostics = NULL
+    ))
+  }
+  if (identical(method, "JM-Recorded")) {
+    b <- fit$marker_model$biomarker
+    risk <- matrix(NA_real_, nrow = nrow(test_s), ncol = length(HORIZONS))
+    for (i in seq_len(nrow(test_s))) {
+      sv <- test_v[test_v$id == test_s$id[i], , drop = FALSE]
+      if (!nrow(sv)) next
+      sv$marker_value <- sv[[b]]
+      sv$id     <- factor(sv$id)
+      sv$Y_obs  <- test_s$A_obs[i]   # alive at the landmark; predict forward
+      sv$status <- 0L
+      sv$X1     <- test_s$X1[i]
+      sv$X2     <- test_s$X2[i]
+      target_times <- test_s$A_obs[i] + HORIZONS
+      pred <- tryCatch(stats::predict(
+        fit$jm_fit, newdata = sv, process = "event", times = target_times,
+        control = list(cores = 1L, n_samples = JM_PRED_N_SAMPLES, return_newdata = TRUE)
+      ), error = function(e) NULL)
+      if (!is.null(pred)) risk[i, ] <- jm_event_risk(pred, target_times)
+    }
     return(list(
       predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
                                           method, fold_id, n_train,

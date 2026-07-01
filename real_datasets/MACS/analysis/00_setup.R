@@ -30,7 +30,7 @@ PACKAGE_DIR  <- normalizePath(file.path(ANALYSIS_DIR, "..", "..", ".."),
                                winslash = "/", mustWork = TRUE)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
-required_packages <- c("survival", "nlme", "ggplot2")
+required_packages <- c("survival", "nlme", "ggplot2", "JMbayes2")
 for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE))
     install.packages(pkg, repos = "https://cloud.r-project.org")
@@ -83,18 +83,25 @@ silk_options(
   FIGURE_DPI             = 600,
   FIGURE_BASE_SIZE       = 14,
   METHOD_ORDER = c(
-    "Landmark-Recorded", "Cox-SameFeature-Recorded", "MMLM-Recorded",
-    "SILK-MeanReg", "SILK-LinearMMD", "SILK"
+    "Landmark-Recorded", "MMLM-Recorded", "JM-Recorded",
+    "SILK-LinearMMD", "SILK"
   ),
   METHOD_LABELS = c(
-    "Landmark-Recorded"        = "Landmark Cox",
-    "Cox-SameFeature-Recorded" = "Same-Feature Recorded Cox",
-    "MMLM-Recorded"            = "Mixed-Model Landmark",
-    "SILK-MeanReg"             = "Mean Registration",
-    "SILK-LinearMMD"           = "Linear-Kernel Registration",
-    "SILK"                     = "SILK"
+    "Landmark-Recorded" = "Landmarking",
+    "MMLM-Recorded"     = "Mixed-Model Landmarking",
+    "JM-Recorded"       = "Joint Model",
+    "SILK-LinearMMD"    = "SILK Linear Kernel + Cox",
+    "SILK"              = "SILK Gaussian Kernel + Cox"
   )
 )
+
+# ── Joint-model (JMbayes2) settings ──────────────────────────────────────────
+# Match the simulation's JM-Recorded comparator (current-value association,
+# recorded disease-age clock). JM is the slowest method; expect minutes per fold.
+JM_N_CHAINS       <- 1L
+JM_N_ITER         <- 1000L
+JM_N_BURNIN       <- 500L
+JM_PRED_N_SAMPLES <- 200L
 
 # ── Real-data registration grid ──────────────────────────────────────────────
 # This is only a candidate search range. It is not an assumed error scenario.

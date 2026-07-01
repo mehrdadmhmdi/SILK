@@ -130,7 +130,7 @@ for (landmark_set in sort(unique(pred_eval$landmark_set))) {
         idx <- z$fold_id == ff & hw$usable
         if (sum(idx) > 0 && length(unique(y[idx])) == 2) {
           fold_auc   <- c(fold_auc, weighted_auc(y[idx], p[idx], w[idx]))
-          fold_brier <- c(fold_brier, mean(w[idx] * (y[idx] - p[idx])^2))
+          fold_brier <- c(fold_brier, weighted.mean((y[idx] - p[idx])^2, w[idx]))
         }
       }
       cal <- weighted_calibration_stats(y, p, w)
@@ -144,7 +144,7 @@ for (landmark_set in sort(unique(pred_eval$landmark_set))) {
         auc_pooled   = weighted_auc(y, p, w),
         auc_mean     = if (length(fold_auc)) mean(fold_auc) else NA,
         auc_se       = if (length(fold_auc) > 1) sd(fold_auc)/sqrt(length(fold_auc)) else NA,
-        brier_pooled = mean(w[usable] * (y[usable] - p[usable])^2),
+        brier_pooled = weighted.mean((y[usable] - p[usable])^2, w[usable]),
         brier_mean   = if (length(fold_brier)) mean(fold_brier) else NA,
         brier_se     = if (length(fold_brier) > 1) sd(fold_brier)/sqrt(length(fold_brier)) else NA,
         cal_intercept = cal[["calibration_intercept"]],
@@ -201,12 +201,11 @@ if (file.exists(diagnostics_file)) {
 
 # ── 4. Plotting setup ───────────────────────────────────────────────────────
 method_colors <- c(
-  "Landmark Cox"                 = "grey50",
-  "Same-Feature Recorded Cox"    = "#4C78A8",
-  "Mixed-Model Landmark"         = UIUC_BLUE,
-  "Mean Registration"            = "#59A14F",
-  "Linear-Kernel Registration"   = "#B07AA1",
-  "SILK"                         = UIUC_ORANGE
+  "Landmarking"                  = "grey50",
+  "Mixed-Model Landmarking"      = UIUC_BLUE,
+  "Joint Model"                  = "#E15759",
+  "SILK Linear Kernel + Cox"     = "#8C564B",
+  "SILK Gaussian Kernel + Cox"   = UIUC_ORANGE
 )
 method_colors <- method_colors[intersect(names(method_colors), unique(metrics$method_label))]
 landmark_facets <- length(unique(metrics$landmark_set)) > 1L
