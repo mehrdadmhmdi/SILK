@@ -3,7 +3,7 @@ sim codes/
 real_datasets/MWCCS
 real_datasets/WIHS
 git/
-
+main_simulation/
 # MACS real-data analysis
 real_datasets/MACS/raw_data/
 real_datasets/MACS/sasinp/
