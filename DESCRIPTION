@@ -22,6 +22,7 @@ Imports:
     utils,
     graphics,
     grDevices,
+    parallel,
     rlang
 Suggests:
     ggplot2 (>= 3.4.0),

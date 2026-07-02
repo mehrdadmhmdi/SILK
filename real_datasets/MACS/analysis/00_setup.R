@@ -68,6 +68,16 @@ silk_options(
   RANDOM_START_SD        = 0.5,
   N_FOLDS                = 5L,
   ANCHOR_MODE            = "rx",
+  # Parallel cross-fit folds. Set SILK_N_CORES in the SLURM job (e.g.
+  # export SILK_N_CORES=$SLURM_CPUS_PER_TASK). 1 = serial; results are
+  # identical to serial because each fold is self-seeded.
+  N_CORES                = as.integer(Sys.getenv("SILK_N_CORES", unset = "1")),
+  # Shrink the estimated origin shift toward the anchor to curb boundary
+  # pile-up on the [-4,4] grid (Gaussian put ~22% of shifts at the boundary,
+  # linear ~99%). 0 disables it. Tune with a quick CV sweep over
+  # {0, 5e-4, 1e-3, 2e-3, 5e-3} via SILK_SHIFT_RIDGE, keeping the value with
+  # the best held-out AUC; 1e-3 is a sensible starting point.
+  SHIFT_RIDGE            = as.numeric(Sys.getenv("SILK_SHIFT_RIDGE", unset = "1e-3")),
   H_A_BANDWIDTH          = 1.5,
   H_X_BANDWIDTH          = 2.0,
   REGISTRATION_KERNEL        = "rbf",

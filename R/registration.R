@@ -224,6 +224,37 @@ with_preserved_seed <- function(seed, expr) {
 }
 
 #' @keywords internal
+#' Apply a function over a list, optionally across CPU cores.
+#'
+#' Uses \code{parallel::mclapply} (fork) when \code{silk_opt("N_CORES") > 1} on
+#' Unix, otherwise falls back to serial \code{lapply}. Each task is expected to
+#' be self-seeded, so parallel and serial runs give identical numeric results.
+silk_parallel_lapply <- function(X, FUN, ...) {
+  n_cores <- suppressWarnings(as.integer(silk_opt("N_CORES")))
+  if (length(n_cores) == 0L || !is.finite(n_cores) || n_cores < 1L) n_cores <- 1L
+  n_cores <- min(n_cores, length(X))
+  if (n_cores <= 1L || .Platform$OS.type != "unix" ||
+      !requireNamespace("parallel", quietly = TRUE)) {
+    return(lapply(X, FUN, ...))
+  }
+  res <- parallel::mclapply(X, FUN, ..., mc.cores = n_cores, mc.preschedule = FALSE)
+  failed <- vapply(res, function(z) inherits(z, "try-error"), logical(1))
+  if (any(failed)) {
+    # Fall back to serial for the failed tasks (e.g. rare fork issues).
+    for (i in which(failed)) res[[i]] <- FUN(X[[i]], ...)
+  }
+  res
+}
+
+#' @keywords internal
+#' Quadratic (ridge) penalty on the candidate shift grid, or NULL when off.
+shift_ridge_matrix <- function(grid, n) {
+  rho <- suppressWarnings(as.numeric(silk_opt("SHIFT_RIDGE")))
+  if (length(rho) == 0L || !is.finite(rho) || rho <= 0) return(NULL)
+  matrix(rho * grid^2, nrow = n, ncol = length(grid), byrow = TRUE)
+}
+
+#' @keywords internal
 make_rff_model <- function(input_dim, config, stream = 0L) {
   seed <- suppressWarnings(as.numeric(config$rff_seed))
   if (length(seed) == 0L || !is.finite(seed)) seed <- NULL
@@ -311,10 +342,12 @@ constrained_grid_update <- function(L_mat, grid, anchor_mat) {
   if (nrow(A) != n) stop("anchor_mat has wrong number of rows", call. = FALSE)
   lower <- min(grid); upper <- max(grid)
   SHIFT_GRID_STEP <- silk_opt("SHIFT_GRID_STEP")
+  ridge <- shift_ridge_matrix(grid, n)
 
   choose_for_lambda <- function(lambda) {
     score <- as.vector(A %*% lambda)
     adj <- L_mat + outer(score, grid, "*")
+    if (!is.null(ridge)) adj <- adj + ridge
     grid[max.col(-adj, ties.method = "first")]
   }
 
@@ -341,7 +374,8 @@ constrained_grid_update <- function(L_mat, grid, anchor_mat) {
       }
       e <- choose_for_lambda((lo + hi) / 2)
     } else {
-      e <- grid[apply(L_mat, 1L, which.min)]
+      Lsel <- if (is.null(ridge)) L_mat else L_mat + ridge
+      e <- grid[apply(Lsel, 1L, which.min)]
     }
     return(project_to_anchor(e, A, lower, upper))
   }
@@ -624,8 +658,10 @@ refine_profile_min <- function(loss_row, grid) {
 predict_registration_shift <- function(template, visits_df, grid) {
   ids <- sort(unique(visits_df$id))
   L <- loss_grid_from_template(template, visits_df, grid)
-  best <- max.col(-L, ties.method = "first")
-  e_refined <- vapply(seq_along(ids), function(i) refine_profile_min(L[i, ], grid), numeric(1))
+  ridge <- shift_ridge_matrix(grid, nrow(L))
+  Lsel <- if (is.null(ridge)) L else L + ridge
+  best <- max.col(-Lsel, ties.method = "first")
+  e_refined <- vapply(seq_along(ids), function(i) refine_profile_min(Lsel[i, ], grid), numeric(1))
 
   data.frame(
     id = ids,
@@ -664,7 +700,9 @@ crossfit_registration <- function(train_visits, train_subjects, feature_type = c
                     at_boundary = NA, gap_q1 = NA_real_, gap_q2 = NA_real_,
                     stringsAsFactors = FALSE)
 
-  for (ff in seq_len(nfold)) {
+  # The cross-fit folds are independent and each is self-seeded, so they can be
+  # run concurrently (silk_opt("N_CORES") > 1) with results identical to serial.
+  fold_results <- silk_parallel_lapply(seq_len(nfold), function(ff) {
     fit_ids <- ids[fold != ff]
     hold_ids <- ids[fold == ff]
     v_fit <- train_visits[train_visits$id %in% fit_ids, , drop = FALSE]
@@ -679,7 +717,10 @@ crossfit_registration <- function(train_visits, train_subjects, feature_type = c
       seed = if (!is.null(seed)) seed + ff else NULL,
       kernel_config = kernel_config
     )
-    pred <- predict_registration_shift(fit$template, v_hold, grid)
+    predict_registration_shift(fit$template, v_hold, grid)
+  })
+
+  for (pred in fold_results) {
     ii <- match(pred$id, out$id)
     out$e_hat[ii] <- pred$e_hat
     out$at_boundary[ii] <- pred$at_boundary

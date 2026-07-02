@@ -93,6 +93,19 @@ silk_default_options <- function() {
     PROFILE_TEMPERATURE = 0.015,
     PROFILE_LOCAL_RADIUS = 0.8,
 
+    # Parallelism for the cross-fitted registration folds. 1L = serial (fully
+    # reproducible, unchanged behaviour). Values > 1 run the independent
+    # cross-fit folds concurrently via parallel::mclapply on Unix; each fold is
+    # self-seeded, so results are identical to the serial run.
+    N_CORES = 1L,
+
+    # Optional quadratic (ridge) penalty on the estimated origin shift, applied
+    # only at the shift-selection step. 0 = off (default; preserves all existing
+    # results). Small positive values shrink shifts toward the anchor and curb
+    # boundary pile-up when the candidate grid is wider than the plausible
+    # offset range (used for real data such as MACS).
+    SHIFT_RIDGE = 0,
+
     # Methods
     METHODS = c(
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
