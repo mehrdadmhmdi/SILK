@@ -224,25 +224,57 @@ with_preserved_seed <- function(seed, expr) {
 }
 
 #' @keywords internal
-#' Apply a function over a list, optionally across CPU cores.
+#' Apply a function over a list, across CPU cores by default.
 #'
-#' Uses \code{parallel::mclapply} (fork) when \code{silk_opt("N_CORES") > 1} on
-#' Unix, otherwise falls back to serial \code{lapply}. Each task is expected to
-#' be self-seeded, so parallel and serial runs give identical numeric results.
+#' The number of workers comes from \code{\link{silk_resolve_cores}} (default
+#' "auto" = all available/allocated cores). On Unix/macOS it uses fork-based
+#' \code{parallel::mclapply}; on Windows it uses a PSOCK cluster
+#' (\code{parallel::parLapply}) that loads the installed SILK package and
+#' propagates the \code{silk.*} options to each worker. A re-entrancy guard
+#' (\code{SILK_PARALLEL_ACTIVE}) prevents nested parallelism, and any backend
+#' failure falls back to serial \code{lapply}. Every task is self-seeded, so
+#' results are identical to a serial run.
 silk_parallel_lapply <- function(X, FUN, ...) {
-  n_cores <- suppressWarnings(as.integer(silk_opt("N_CORES")))
-  if (length(n_cores) == 0L || !is.finite(n_cores) || n_cores < 1L) n_cores <- 1L
+  n_cores <- silk_resolve_cores()
   n_cores <- min(n_cores, length(X))
-  if (n_cores <= 1L || .Platform$OS.type != "unix" ||
-      !requireNamespace("parallel", quietly = TRUE)) {
+  nested <- nzchar(Sys.getenv("SILK_PARALLEL_ACTIVE"))
+  if (n_cores <= 1L || nested || !requireNamespace("parallel", quietly = TRUE)) {
     return(lapply(X, FUN, ...))
   }
-  res <- parallel::mclapply(X, FUN, ..., mc.cores = n_cores, mc.preschedule = FALSE)
-  failed <- vapply(res, function(z) inherits(z, "try-error"), logical(1))
-  if (any(failed)) {
-    # Fall back to serial for the failed tasks (e.g. rare fork issues).
-    for (i in which(failed)) res[[i]] <- FUN(X[[i]], ...)
+
+  Sys.setenv(SILK_PARALLEL_ACTIVE = "1")
+  on.exit(Sys.unsetenv("SILK_PARALLEL_ACTIVE"), add = TRUE)
+
+  if (.Platform$OS.type == "unix") {
+    res <- parallel::mclapply(X, FUN, ..., mc.cores = n_cores, mc.preschedule = FALSE)
+    failed <- vapply(res, function(z) inherits(z, "try-error"), logical(1))
+    if (any(failed)) {
+      for (i in which(failed)) res[[i]] <- FUN(X[[i]], ...)
+    }
+    return(res)
   }
+
+  # Windows (no fork): PSOCK cluster. Workers must be able to load the SILK
+  # namespace; when only dev-loaded (not installed) this is unavailable, so we
+  # fall back to serial rather than error.
+  if (!requireNamespace("SILK", quietly = TRUE)) {
+    return(lapply(X, FUN, ...))
+  }
+  cl <- tryCatch(parallel::makePSOCKcluster(n_cores), error = function(e) NULL)
+  if (is.null(cl)) return(lapply(X, FUN, ...))
+  on.exit(parallel::stopCluster(cl), add = TRUE)
+  silk_opts <- options()[grep("^silk\\.", names(options()), value = TRUE)]
+  ok <- tryCatch({
+    parallel::clusterCall(cl, function(o) {
+      suppressWarnings(suppressMessages(library(SILK)))
+      options(o)
+      invisible(NULL)
+    }, silk_opts)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!ok) return(lapply(X, FUN, ...))
+  res <- tryCatch(parallel::parLapply(cl, X, FUN, ...), error = function(e) NULL)
+  if (is.null(res)) return(lapply(X, FUN, ...))
   res
 }
 

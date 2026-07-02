@@ -30,7 +30,11 @@ PACKAGE_DIR  <- normalizePath(file.path(ANALYSIS_DIR, "..", "..", ".."),
                                winslash = "/", mustWork = TRUE)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
-required_packages <- c("survival", "nlme", "ggplot2", "JMbayes2")
+# SILK's own Imports (survival, nlme, ggplot2, grid, parallel, ...) install
+# automatically with the package. These are the extra packages the analysis
+# scripts need: the joint-model and random-forest comparators, plus pkgload
+# for loading the local package source during development.
+required_packages <- c("survival", "nlme", "ggplot2", "JMbayes2", "ranger", "pkgload")
 for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE))
     install.packages(pkg, repos = "https://cloud.r-project.org")
@@ -68,10 +72,11 @@ silk_options(
   RANDOM_START_SD        = 0.5,
   N_FOLDS                = 5L,
   ANCHOR_MODE            = "rx",
-  # Parallel cross-fit folds. Set SILK_N_CORES in the SLURM job (e.g.
-  # export SILK_N_CORES=$SLURM_CPUS_PER_TASK). 1 = serial; results are
-  # identical to serial because each fold is self-seeded.
-  N_CORES                = as.integer(Sys.getenv("SILK_N_CORES", unset = "1")),
+  # Parallel cross-fit folds. "auto" uses all available/allocated cores
+  # (honours SILK_N_CORES, then SLURM_CPUS_PER_TASK, then detectCores()).
+  # Set N_CORES = 1 or SILK_N_CORES=1 to disable. Results are identical to
+  # serial because each fold is self-seeded.
+  N_CORES                = "auto",
   # Shrink the estimated origin shift toward the anchor to curb boundary
   # pile-up on the [-4,4] grid (Gaussian put ~22% of shifts at the boundary,
   # linear ~99%). 0 disables it. Tune with a quick CV sweep over

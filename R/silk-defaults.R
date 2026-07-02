@@ -93,11 +93,13 @@ silk_default_options <- function() {
     PROFILE_TEMPERATURE = 0.015,
     PROFILE_LOCAL_RADIUS = 0.8,
 
-    # Parallelism for the cross-fitted registration folds. 1L = serial (fully
-    # reproducible, unchanged behaviour). Values > 1 run the independent
-    # cross-fit folds concurrently via parallel::mclapply on Unix; each fold is
-    # self-seeded, so results are identical to the serial run.
-    N_CORES = 1L,
+    # Parallelism for the cross-fitted registration folds. Default "auto" uses
+    # every available core: it honours SILK_N_CORES, then the cluster
+    # allocation (SLURM_CPUS_PER_TASK, NSLOTS, PBS_NUM_PPN), then
+    # parallel::detectCores(). Set N_CORES = 1 (or SILK_N_CORES=1) to disable.
+    # Fork (Unix/macOS) and PSOCK (Windows) backends are both supported; each
+    # fold is self-seeded, so results are identical to a serial run.
+    N_CORES = "auto",
 
     # Optional quadratic (ridge) penalty on the estimated origin shift, applied
     # only at the shift-selection step. 0 = off (default; preserves all existing
@@ -276,6 +278,55 @@ silk_default_options <- function() {
 #' @export
 silk_opt <- function(name) {
   getOption(paste0("silk.", name))
+}
+
+#' Detect the number of usable CPU cores
+#'
+#' Resolves how many cores SILK may use, in priority order: the
+#' \code{SILK_N_CORES} environment variable, then common cluster-scheduler
+#' allocations (\code{SLURM_CPUS_PER_TASK}, \code{NSLOTS}, \code{PBS_NUM_PPN},
+#' \code{PBS_NP}), then \code{parallel::detectCores()}. Always returns an
+#' integer \eqn{\ge 1}. On a scheduler this respects the requested allocation
+#' rather than the physical core count of the node.
+#'
+#' @return Integer number of cores.
+#' @export
+silk_detect_cores <- function() {
+  env <- Sys.getenv("SILK_N_CORES", "")
+  if (nzchar(env)) {
+    n <- suppressWarnings(as.integer(env))
+    if (length(n) && is.finite(n) && n >= 1L) return(n)
+  }
+  for (v in c("SLURM_CPUS_PER_TASK", "NSLOTS", "PBS_NUM_PPN", "PBS_NP")) {
+    e <- Sys.getenv(v, "")
+    if (nzchar(e)) {
+      n <- suppressWarnings(as.integer(e))
+      if (length(n) && is.finite(n) && n >= 1L) return(n)
+    }
+  }
+  n <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) 1L)
+  if (length(n) == 0L || !is.finite(n) || n < 1L) n <- 1L
+  as.integer(n)
+}
+
+#' Resolve the configured worker count
+#'
+#' Interprets \code{silk_opt("N_CORES")}: \code{"auto"}/\code{"all"}/\code{NULL}
+#' delegate to \code{\link{silk_detect_cores}}; a numeric value is used as-is
+#' (floored at 1).
+#'
+#' @return Integer number of workers.
+#' @keywords internal
+silk_resolve_cores <- function() {
+  v <- silk_opt("N_CORES")
+  if (is.null(v) || length(v) == 0L) return(silk_detect_cores())
+  if (is.character(v)) {
+    if (tolower(v[1]) %in% c("auto", "all", "")) return(silk_detect_cores())
+    v <- suppressWarnings(as.integer(v[1]))
+  }
+  n <- suppressWarnings(as.integer(v[1]))
+  if (length(n) == 0L || !is.finite(n) || n < 1L) n <- 1L
+  n
 }
 
 #' Set SILK package options

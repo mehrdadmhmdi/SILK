@@ -23,9 +23,12 @@ Imports:
     graphics,
     grDevices,
     parallel,
-    rlang
-Suggests:
-    ggplot2 (>= 3.4.0),
-    grid,
+    rlang,
     nlme,
-    testthat (>= 3.0.0)
+    ggplot2 (>= 3.4.0),
+    grid
+Suggests:
+    testthat (>= 3.0.0),
+    pkgload,
+    ranger,
+    JMbayes2

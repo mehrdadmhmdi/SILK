@@ -15,6 +15,7 @@ export(make_history_features)
 export(silk_options)
 export(silk_opt)
 export(silk_default_options)
+export(silk_detect_cores)
 
 # Scenario utilities
 export(get_scenario)
