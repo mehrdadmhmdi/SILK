@@ -10,7 +10,7 @@ Install directly from GitHub:
 # 1. Install the remotes package if you haven't already
 install.packages("remotes")
 # 2. Use the full HTTPS URL
-remotes::install_git("https://github.com/mehrdadmhmdi/SILK.git")
+remotes::install_git("https://github.com/mehrdadmhmdi/SILK.git", dependencies = TRUE)
 ```
 
 ## Quick Start
