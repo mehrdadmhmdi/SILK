@@ -13,15 +13,22 @@ module purge
 module load slurm-env/0.1
 module load cray-R/4.4.0
 
-SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SIM_DIR="${SILK_SIM_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
+SIM_DIR="$(cd "$SIM_DIR" && pwd)"
+if [[ ! -f "$SIM_DIR/task.R" || ! -f "$SIM_DIR/cluster_prepare_package.sh" ]]; then
+  echo "Simulation files were not found under $SIM_DIR" >&2
+  echo "Submit from the simulation directory: cd '<repo>/example/sim codes' && sbatch job_full.sbatch" >&2
+  exit 1
+fi
+export SILK_SIM_DIR="$SIM_DIR"
 cd "$SIM_DIR"
 
 export SILK_OUT_DIR="${SILK_OUT_DIR:-$SIM_DIR/outputs}"
 export SILK_MAX_CONCURRENT="${SILK_MAX_CONCURRENT:-40}"
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
 
-# Install the exact source tree once. Every array worker receives this private
-# library through --export=ALL and therefore cannot silently use a stale SILK.
+# Clone and install the GitHub package once. Every array worker receives this
+# private library through --export=ALL and never installs the package itself.
 source "$SIM_DIR/cluster_prepare_package.sh"
 
 Rscript -e 'source(file.path("R", "run_simulation_comparisons.R")); source_silk_prediction_modules(); source(file.path("R", "resource_tasks.R")); write_resource_task_lists()'

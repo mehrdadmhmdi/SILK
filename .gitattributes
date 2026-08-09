@@ -1,2 +1,4 @@
 real_datasets/MACS/data/*.dat filter=lfs diff=lfs merge=lfs -text
 *.dat filter=lfs diff=lfs merge=lfs -text
+*.sh text eol=lf
+*.sbatch text eol=lf
