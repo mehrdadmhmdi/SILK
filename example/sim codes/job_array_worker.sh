@@ -45,7 +45,7 @@ export MKL_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-export R_LIBS_USER="$SILK_R_LIB${R_LIBS_USER:+:$R_LIBS_USER}"
+export R_LIBS="$SILK_R_LIB${R_LIBS:+:$R_LIBS}"
 Rscript -e 'library(SILK); stopifnot(is.function(fit_silk_registration), identical(silk_default_options()$BIOMARKER_BANDWIDTH, "median"))'
 
 echo "Task $SILK_TASK_ID; class ${SILK_RESOURCE_CLASS:-unclassified}; registration cores $SILK_N_CORES; method cores $SILK_METHOD_CORES"

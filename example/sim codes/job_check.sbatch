@@ -19,6 +19,6 @@ if [[ ! -f "$SIM_DIR/collect.R" ]]; then
 fi
 cd "$SIM_DIR"
 : "${SILK_R_LIB:?SILK_R_LIB is not set}"
-export R_LIBS_USER="$SILK_R_LIB${R_LIBS_USER:+:$R_LIBS_USER}"
+export R_LIBS="$SILK_R_LIB${R_LIBS:+:$R_LIBS}"
 export SILK_N_CORES=1
 exec Rscript "$SIM_DIR/collect.R"

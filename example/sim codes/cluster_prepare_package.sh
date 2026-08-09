@@ -15,10 +15,14 @@ export SILK_R_LIB="${SILK_R_LIB:-$SILK_OUT_DIR/R-library/$SILK_INSTALL_ID}"
 
 mkdir -p "$PACKAGE_SOURCE_PARENT" "$SILK_R_LIB" "$SILK_OUT_DIR/summary"
 
-# Preserve the library paths R would use before introducing the run-specific
-# package library. Cluster dependencies can therefore remain in the Cray R or
-# user libraries, while SILK itself is loaded from this run's private library.
-existing_r_libraries="$(Rscript -e 'cat(.libPaths(), collapse=.Platform$path.sep)')"
+# Confirm that the currently loaded Cray R module can see SILK's required
+# non-base dependencies before changing the package search path.
+Rscript -e '
+  required <- c("survival", "rlang", "nlme", "ggplot2")
+  missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
+  cat("R library paths before SILK installation:\n", paste(.libPaths(), collapse = "\n"), "\n")
+  if (length(missing)) stop("Missing required R packages: ", paste(missing, collapse = ", "))
+'
 
 echo "Cloning SILK once from $SILK_PACKAGE_REPOSITORY (ref $SILK_PACKAGE_REF)"
 git clone --depth 1 --single-branch --branch "$SILK_PACKAGE_REF" \
@@ -27,7 +31,10 @@ export SILK_PACKAGE_COMMIT="$(git -C "$PACKAGE_SOURCE" rev-parse HEAD)"
 
 echo "Installing GitHub commit $SILK_PACKAGE_COMMIT into $SILK_R_LIB"
 R CMD INSTALL --preclean --no-multiarch --library="$SILK_R_LIB" "$PACKAGE_SOURCE"
-export R_LIBS_USER="$SILK_R_LIB${existing_r_libraries:+:${existing_r_libraries}}"
+# R_LIBS adds the private SILK library without replacing R_LIBS_USER. Thus
+# dependencies installed in the normal Cray, site, or user libraries remain
+# visible when workers load SILK.
+export R_LIBS="$SILK_R_LIB${R_LIBS:+:$R_LIBS}"
 
 cat > "$SILK_OUT_DIR/summary/silk_package_provenance.txt" <<EOF
 repository=$SILK_PACKAGE_REPOSITORY

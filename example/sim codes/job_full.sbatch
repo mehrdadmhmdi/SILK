@@ -24,7 +24,6 @@ export SILK_SIM_DIR="$SIM_DIR"
 cd "$SIM_DIR"
 
 export SILK_OUT_DIR="${SILK_OUT_DIR:-$SIM_DIR/outputs}"
-export SILK_MAX_CONCURRENT="${SILK_MAX_CONCURRENT:-40}"
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
 
 # Clone and install the GitHub package once. Every array worker receives this
@@ -43,7 +42,9 @@ array_jobs=()
 while IFS=$'\t' read -r resource_class n_tasks _sbatch task_list cpus memory walltime _description; do
   [[ "$resource_class" == "resource_class" ]] && continue
   [[ -z "$resource_class" || "$n_tasks" -lt 1 ]] && continue
-  array_spec="1-${n_tasks}%${SILK_MAX_CONCURRENT}"
+  # Submit the full array without a user-imposed concurrency throttle. Slurm
+  # will still enforce partition, account, QOS, and site-wide scheduling limits.
+  array_spec="1-${n_tasks}"
   job_id="$(sbatch --parsable \
     --job-name="silk-${resource_class}" \
     --account=bhmn-delta-cpu \
