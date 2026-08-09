@@ -23,7 +23,32 @@ fi
 export SILK_SIM_DIR="$SIM_DIR"
 cd "$SIM_DIR"
 
-export SILK_OUT_DIR="${SILK_OUT_DIR:-$SIM_DIR/outputs}"
+# Confirmatory defaults. When this file is submitted from a Git checkout, use
+# that exact commit for the installed SILK package so the simulation scripts
+# and package implementation cannot silently drift apart. Each setting remains
+# overridable by exporting it before sbatch.
+REPO_DIR="$(cd "$SIM_DIR/../.." && pwd)"
+if git -C "$REPO_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  DEFAULT_PACKAGE_REF="$(git -C "$REPO_DIR" rev-parse HEAD)"
+else
+  DEFAULT_PACKAGE_REF="master"
+fi
+
+export SILK_PACKAGE_REF="${SILK_PACKAGE_REF:-$DEFAULT_PACKAGE_REF}"
+export SILK_N_REP="${SILK_N_REP:-50}"
+export SILK_BIOMARKER_KERNELS="${SILK_BIOMARKER_KERNELS:-gaussian,laplace,matern32}"
+export SILK_ENABLE_JMBAYES2="${SILK_ENABLE_JMBAYES2:-true}"
+export SILK_INCLUDE_HISTORY_ABLATION="${SILK_INCLUDE_HISTORY_ABLATION:-false}"
+export SILK_OUT_DIR="${SILK_OUT_DIR:-$SIM_DIR/outputs-confirmatory}"
+
+echo "SILK confirmatory configuration"
+echo "  package ref:      $SILK_PACKAGE_REF"
+echo "  output directory: $SILK_OUT_DIR"
+echo "  replicates:       $SILK_N_REP"
+echo "  kernels:          $SILK_BIOMARKER_KERNELS"
+echo "  JMbayes2:         $SILK_ENABLE_JMBAYES2"
+echo "  history ablation: $SILK_INCLUDE_HISTORY_ABLATION"
+
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
 
 # Prepare or reuse one persistent R/Python environment. Every array worker
