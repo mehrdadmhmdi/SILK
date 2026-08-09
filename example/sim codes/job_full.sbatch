@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=silk-submit
+#SBATCH --account=bhmn-delta-cpu
+#SBATCH --partition=cpu
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=01:00:00
 #SBATCH --output=slurm-%x-%j.out
 
 set -euo pipefail
+
+module purge
+module load slurm-env/0.1
+module load cray-R/4.4.0
 
 SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SIM_DIR"
@@ -33,6 +39,8 @@ while IFS=$'\t' read -r resource_class n_tasks _sbatch task_list cpus memory wal
   array_spec="1-${n_tasks}%${SILK_MAX_CONCURRENT}"
   job_id="$(sbatch --parsable \
     --job-name="silk-${resource_class}" \
+    --account=bhmn-delta-cpu \
+    --partition=cpu \
     --cpus-per-task="$cpus" \
     --mem="$memory" \
     --time="$walltime" \

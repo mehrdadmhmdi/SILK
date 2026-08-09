@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
+#SBATCH --account=bhmn-delta-cpu
+#SBATCH --partition=cpu
+
 set -euo pipefail
+
+module purge
+module load slurm-env/0.1
+module load cray-R/4.4.0
 
 SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SIM_DIR"
