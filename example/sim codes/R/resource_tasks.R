@@ -16,15 +16,15 @@ RESOURCE_CLASSES <- data.frame(
     "job_array_long_time.sbatch",
     "job_array_extreme.sbatch"
   ),
-  cpus = c(8L, 8L, 8L, 8L, 8L),
-  memory = c("6g", "10g", "18g", "12g", "28g"),
-  walltime = c("06:00:00", "08:00:00", "12:00:00", "18:00:00", "30:00:00"),
+  cpus = c(4L, 4L, 4L, 4L, 4L),
+  memory = c("12g", "16g", "24g", "20g", "32g"),
+  walltime = c("08:00:00", "12:00:00", "18:00:00", "24:00:00", "36:00:00"),
   description = c(
     "Baseline cells with observed-age ML comparators.",
     "Large training size, dense visits, or JMbayes2-enabled baseline cells.",
     "Distributional biomarker cells with prior OOM risk.",
     "Severe-error cells with prior walltime risk.",
-    "Combined memory/time risk or static Bayesian survival sensitivity."
+    "Combined memory/time risk from dense registration, JM, and DeepSurv."
   ),
   stringsAsFactors = FALSE
 )
@@ -32,7 +32,6 @@ RESOURCE_CLASSES <- data.frame(
 resource_flag_summary <- function() {
   c(
     if (isTRUE(ENABLE_JMBAYES2)) "JMbayes2 enabled",
-    if (isTRUE(BAYES_DYNAMIC_ENABLE_STATIC_FALLBACK)) "static Bayesian survival fallback enabled",
     if (DEEPSURV_EPOCHS > 80L) paste0("DeepSurv epochs=", DEEPSURV_EPOCHS),
     if (RSF_NUM_TREES > 300L) paste0("RSF trees=", RSF_NUM_TREES),
     if (TIMEERROR_N_IMPUTE > 5L) paste0("time-error imputations=", TIMEERROR_N_IMPUTE),
@@ -73,16 +72,6 @@ base_resource_class <- function(plan) {
 
 promote_for_methods <- function(class, plan) {
   out <- class
-
-  if (isTRUE(BAYES_DYNAMIC_ENABLE_STATIC_FALLBACK)) {
-    out <- ifelse(
-      out %in% c("high_memory", "long_time", "medium") |
-        plan$n_train >= 1000L | plan$n_visits >= 12L,
-      "extreme",
-      "long_time"
-    )
-    return(out)
-  }
 
   if (isTRUE(ENABLE_JMBAYES2)) {
     out <- ifelse(out == "standard", "medium", out)

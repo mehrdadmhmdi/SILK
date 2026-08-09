@@ -34,18 +34,33 @@ r_common_shift <- function(n, sigma_eps, eps_mean = 0, eps_type = "normal") {
 }
 
 #' @keywords internal
-true_survival_curve <- function(u, eta_risk) {
-  SURV_LAMBDA_D <- silk_opt("SURV_LAMBDA_D")
-  SURV_KAPPA_D <- silk_opt("SURV_KAPPA_D")
-  exp(-((u / SURV_LAMBDA_D) ^ SURV_KAPPA_D) * exp(eta_risk))
+attained_age_cumulative_hazard <- function(age, growth = NULL) {
+  if (is.null(growth)) growth <- silk_opt("SURV_AGE_GROWTH")
+  rate <- as.numeric(silk_opt("SURV_AGE_BASE_RATE"))[1L]
+  growth <- as.numeric(growth)[1L]
+  center <- as.numeric(silk_opt("A_STAR_CENTER"))[1L]
+  if (!is.finite(rate) || rate <= 0 || !is.finite(growth) || growth <= 0) {
+    stop("Attained-age Gompertz rate and growth must be positive.", call. = FALSE)
+  }
+  rate / growth * exp(growth * (as.numeric(age) - center))
 }
 
 #' @keywords internal
-rweibull_ph <- function(eta_risk) {
-  SURV_LAMBDA_D <- silk_opt("SURV_LAMBDA_D")
-  SURV_KAPPA_D <- silk_opt("SURV_KAPPA_D")
-  u <- stats::runif(length(eta_risk))
-  SURV_LAMBDA_D * (-log1p(-u) * exp(-eta_risk)) ^ (1 / SURV_KAPPA_D)
+true_survival_curve <- function(u, start_age, eta_risk, growth = NULL) {
+  cumulative_increment <- attained_age_cumulative_hazard(start_age + u, growth) -
+    attained_age_cumulative_hazard(start_age, growth)
+  exp(-pmax(cumulative_increment, 0) * exp(eta_risk))
+}
+
+#' @keywords internal
+r_attained_age_ph <- function(start_age, eta_risk, growth = NULL) {
+  target <- stats::rexp(length(eta_risk)) * exp(-eta_risk)
+  start_hazard <- attained_age_cumulative_hazard(start_age, growth)
+  growth <- if (is.null(growth)) silk_opt("SURV_AGE_GROWTH") else growth
+  rate <- silk_opt("SURV_AGE_BASE_RATE")
+  center <- silk_opt("A_STAR_CENTER")
+  stop_age <- center + log((start_hazard + target) * growth / rate) / growth
+  pmax(stop_age - start_age, 0)
 }
 
 #' @keywords internal
@@ -97,25 +112,36 @@ r_biomarkers <- function(age, X1, X2, U, sc, p) {
   signal <- sc$biomarker_signal[1]
 
   if (signal %in% c("distribution", "distribution_strong")) {
-    ucoef <- sc_val(sc, "u_bio_coef", 0.10)
-    mean_mat <- matrix(0.08 * X1 + 0.05 * X2 + ucoef * U, nrow = n, ncol = p)
+    # A deliberately weak mean trajectory supplies a stable clock initializer;
+    # the principal signal remains the stage-varying, moment-matched shape
+    # below, which is what the characteristic-kernel loss exploits.
+    mean_mat <- marker_mean_matrix(age, X1, X2, U, p, sc)
     stage_z <- (age - A_STAR_CENTER) / A_STAR_SD
-    sd_age <- sc_val(sc, "dist_sd_base", DIST_SD_BASE) *
-      exp(sc_val(sc, "dist_sd_slope", DIST_SD_SLOPE) * stage_z / 2)
-    sd_age <- pmax(sd_age, 0.10)
-
-    Z <- matrix(stats::rnorm(n * p), nrow = n, ncol = p)
-
-    tail_prob <- logistic(-1.35 + 1.15 * stage_z)
-    tail_scale <- ifelse(stats::rbinom(n, size = 1L, prob = tail_prob) == 1L, 2.75, 1.0)
-    Z <- Z * matrix(tail_scale, nrow = n, ncol = p, byrow = FALSE)
-
-    common_sd <- 0.10 + 0.22 * logistic(stage_z)
-    common <- stats::rnorm(n) * common_sd
-    out <- mean_mat + Z * matrix(sd_age, nrow = n, ncol = p, byrow = FALSE)
-    if (p >= 4L) {
-      out[, seq(1, p, by = 4)] <- out[, seq(1, p, by = 4), drop = FALSE] + common
-    }
+    # Shape-only signal: the stage-dependent innovation moves from Gaussian to
+    # symmetric bimodal while preserving mean zero and variance one. Hence raw
+    # means and variances do not identify stage, whereas a characteristic
+    # kernel mean embedding can distinguish the full distributions.
+    shape_weight <- logistic(
+      sc_val(sc, "dist_sd_slope", DIST_SD_SLOPE) * stage_z
+    )
+    use_bimodal <- matrix(
+      stats::runif(n * p) < rep(shape_weight, each = p), nrow = n, byrow = TRUE
+    )
+    separation <- if (signal == "distribution_strong") 0.90 else 0.78
+    component <- matrix(sample(c(-1, 1), n * p, replace = TRUE), nrow = n)
+    normal <- matrix(stats::rnorm(n * p), nrow = n)
+    bimodal <- separation * component + sqrt(1 - separation^2) * normal
+    innovation <- ifelse(use_bimodal, bimodal, normal)
+    scale <- sc_val(sc, "dist_sd_base", DIST_SD_BASE)
+    out <- mean_mat + scale * innovation
+  } else if (signal == "stage_null") {
+    # Prespecified negative control: biomarkers can depend on observed baseline
+    # covariates but contain no latent-age, origin-shift, or frailty information.
+    mean_mat <- matrix(0.18 * X1 + 0.10 * X2, nrow = n, ncol = p)
+    out <- mean_mat + matrix(
+      stats::rnorm(n * p, sd = sc_val(sc, "sigma_bio", SIGMA_BIO_WEAK)),
+      nrow = n
+    )
   } else if (signal == "weak") {
     mean_mat <- marker_mean_matrix(age, X1, X2, U, p, sc)
     out <- mean_mat + matrix(stats::rnorm(n * p, sd = sc_val(sc, "sigma_bio", SIGMA_BIO_WEAK)), nrow = n, ncol = p)
@@ -220,7 +246,6 @@ generate_dataset_fixed <- function(n, scenario_name, schedule_name = NULL, seed 
   LATENT_AGE_MAX <- silk_opt("LATENT_AGE_MAX")
   A_STAR_CENTER <- silk_opt("A_STAR_CENTER")
   A_STAR_SD <- silk_opt("A_STAR_SD")
-  SURV_BETA_A <- silk_opt("SURV_BETA_A")
   SURV_BETA_X1 <- silk_opt("SURV_BETA_X1")
   SURV_BETA_X2 <- silk_opt("SURV_BETA_X2")
   SURV_BETA_U <- silk_opt("SURV_BETA_U")
@@ -233,12 +258,11 @@ generate_dataset_fixed <- function(n, scenario_name, schedule_name = NULL, seed 
   eps <- r_common_shift(n, sc$sigma_eps, sc$eps_mean, sc$eps_type)
   A_obs <- A_star + eps
 
-  beta_A <- sc_val(sc, "risk_beta_A", SURV_BETA_A)
   beta_U <- sc_val(sc, "risk_beta_U", SURV_BETA_U)
-  eta_risk <- beta_A * ((A_star - A_STAR_CENTER) / A_STAR_SD) +
-    SURV_BETA_X1 * X1 + SURV_BETA_X2 * X2 + beta_U * U_latent
+  risk_age_growth <- sc_val(sc, "risk_age_growth", silk_opt("SURV_AGE_GROWTH"))
+  eta_risk <- SURV_BETA_X1 * X1 + SURV_BETA_X2 * X2 + beta_U * U_latent
 
-  D_star <- rweibull_ph(eta_risk)
+  D_star <- r_attained_age_ph(A_star, eta_risk, growth = risk_age_growth)
   G_star <- stats::rexp(n, rate = CENS_RATE)
   U <- pmin(D_star, G_star)
   delta <- as.integer(D_star <= G_star)
@@ -256,6 +280,7 @@ generate_dataset_fixed <- function(n, scenario_name, schedule_name = NULL, seed 
     eps = eps,
     A_obs = A_obs,
     eta_risk = eta_risk,
+    risk_age_growth = risk_age_growth,
     D_star = D_star,
     G_star = G_star,
     T_star = T_star,
@@ -340,6 +365,14 @@ make_history_features <- function(subjects, visits, max_biomarkers = 4L) {
 
 #' @keywords internal
 make_true_survival_matrix <- function(subjects, u_grid) {
-  mat <- outer(subjects$eta_risk, u_grid, function(eta, u) true_survival_curve(u, eta))
-  matrix(mat, nrow = nrow(subjects), ncol = length(u_grid))
+  stop_age <- outer(subjects$A_star, u_grid, "+")
+  start_hazard <- attained_age_cumulative_hazard(
+    subjects$A_star, subjects$risk_age_growth[1L]
+  )
+  stop_hazard <- attained_age_cumulative_hazard(
+    as.vector(stop_age), subjects$risk_age_growth[1L]
+  )
+  increment <- matrix(stop_hazard, nrow = nrow(subjects), ncol = length(u_grid)) -
+    matrix(start_hazard, nrow = nrow(subjects), ncol = length(u_grid))
+  exp(-pmax(increment, 0) * exp(subjects$eta_risk))
 }

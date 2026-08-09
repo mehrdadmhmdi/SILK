@@ -2,7 +2,7 @@
 % Please edit documentation in R/silk-method.R
 \name{fit_same_feature_recorded_cox}
 \alias{fit_same_feature_recorded_cox}
-\title{Fit the same-feature recorded-age Cox comparator}
+\title{Fit the recorded-clock Cox comparator}
 \usage{
 fit_same_feature_recorded_cox(train_subjects, train_visits)
 }
@@ -15,5 +15,7 @@ fit_same_feature_recorded_cox(train_subjects, train_visits)
 Fitted comparator object.
 }
 \description{
-Uses the same biomarker-history feature vector as SILK but keeps recorded age.
+Uses the same attained-age Cox model and baseline covariates as SILK but
+retains recorded age as the time coordinate. Biomarkers enter SILK only
+through registration in this primary clock-isolation comparison.
 }

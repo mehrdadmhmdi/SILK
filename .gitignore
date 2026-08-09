@@ -8,6 +8,7 @@ example/sim codes/R/*
 !example/sim codes/*.R
 !example/sim codes/*.sh
 !example/sim codes/*.sbatch
+!example/sim codes/README.md
 example/real_datasets/MWCCS
 example/real_datasets/WIHS
 git/

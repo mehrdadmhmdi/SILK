@@ -7,7 +7,7 @@
 #
 #   ||phi(B) - mu_hat(x)||^2_HB,
 #
-# where k_B is a Gaussian RBF kernel and
+# where k_B is a supported exact characteristic kernel and
 # mu_hat(x) = sum_i beta_i(x) phi(B_i).  Its observable expansion is
 #
 #   1 - 2 beta(x)' k_B(B_train, B) + beta(x)' K_B beta(x).
@@ -67,6 +67,76 @@ gaussian_rbf_kernel <- function(x, y = NULL, bandwidth) {
 }
 
 #' @keywords internal
+laplace_kernel <- function(x, y = NULL, bandwidth) {
+  bandwidth <- as.numeric(bandwidth)[1L]
+  if (!is.finite(bandwidth) || bandwidth <= 0) {
+    stop("Laplace biomarker-kernel bandwidth must be strictly positive.", call. = FALSE)
+  }
+  exp(-sqrt(pairwise_squared_distance(x, y)) / bandwidth)
+}
+
+#' @keywords internal
+matern32_kernel <- function(x, y = NULL, bandwidth) {
+  bandwidth <- as.numeric(bandwidth)[1L]
+  if (!is.finite(bandwidth) || bandwidth <= 0) {
+    stop("Matern-3/2 biomarker-kernel bandwidth must be strictly positive.", call. = FALSE)
+  }
+  radius <- sqrt(3 * pairwise_squared_distance(x, y)) / bandwidth
+  (1 + radius) * exp(-radius)
+}
+
+#' @keywords internal
+normalize_biomarker_kernel <- function(kernel = NULL) {
+  if (is.null(kernel) || !length(kernel) || !nzchar(trimws(as.character(kernel)[1L]))) {
+    kernel <- silk_opt("BIOMARKER_KERNEL")
+  }
+  key <- tolower(gsub("[^a-z0-9]", "", trimws(as.character(kernel)[1L])))
+  canonical <- switch(
+    key,
+    gaussian = "gaussian_rbf",
+    gaussianrbf = "gaussian_rbf",
+    rbf = "gaussian_rbf",
+    laplace = "laplace_l2",
+    laplacian = "laplace_l2",
+    laplacel2 = "laplace_l2",
+    matern12 = "laplace_l2",
+    matern = "matern_3_2",
+    matern32 = "matern_3_2",
+    stop(
+      "Unsupported biomarker kernel '", as.character(kernel)[1L],
+      "'. Use one of: gaussian, laplace, or matern32. Linear and polynomial ",
+      "kernels are deliberately unavailable because they are not generally characteristic.",
+      call. = FALSE
+    )
+  )
+  canonical
+}
+
+#' @keywords internal
+evaluate_biomarker_kernel <- function(x, y = NULL, builder) {
+  if (is.null(builder$kernel) || is.null(builder$bandwidth)) {
+    stop("Invalid biomarker-kernel builder.", call. = FALSE)
+  }
+  switch(
+    normalize_biomarker_kernel(builder$kernel),
+    gaussian_rbf = gaussian_rbf_kernel(x, y, builder$bandwidth),
+    laplace_l2 = laplace_kernel(x, y, builder$bandwidth),
+    matern_3_2 = matern32_kernel(x, y, builder$bandwidth),
+    stop("Unsupported fitted biomarker kernel.", call. = FALSE)
+  )
+}
+
+#' @keywords internal
+biomarker_kernel_label <- function(kernel) {
+  switch(
+    normalize_biomarker_kernel(kernel),
+    gaussian_rbf = "Gaussian RBF",
+    laplace_l2 = "Laplace",
+    matern_3_2 = "Matern-3/2"
+  )
+}
+
+#' @keywords internal
 median_distance_bandwidth <- function(x, max_points = NULL) {
   x <- as.matrix(x)
   if (is.null(max_points)) max_points <- silk_opt("BIOMARKER_BANDWIDTH_MAX_POINTS")
@@ -84,7 +154,7 @@ median_distance_bandwidth <- function(x, max_points = NULL) {
 }
 
 #' @keywords internal
-make_biomarker_kernel_builder <- function(visits_df) {
+make_biomarker_kernel_builder <- function(visits_df, biomarker_kernel = NULL) {
   columns <- bio_columns(visits_df)
   biomarkers <- as.matrix(visits_df[, columns, drop = FALSE])
   scaler <- make_scaler(biomarkers)
@@ -104,8 +174,9 @@ make_biomarker_kernel_builder <- function(visits_df) {
     )
   }
   list(
-    kernel = "gaussian_rbf",
+    kernel = normalize_biomarker_kernel(biomarker_kernel),
     characteristic = TRUE,
+    normalized_diagonal = TRUE,
     biomarker_cols = columns,
     scaler = scaler,
     bandwidth = bandwidth,
@@ -126,6 +197,27 @@ apply_biomarker_builder <- function(visits_df, builder) {
     as.matrix(visits_df[, builder$biomarker_cols, drop = FALSE]),
     builder$scaler
   )
+}
+
+#' @keywords internal
+longitudinal_kernel_signal <- function(visits_df, standardized, builder) {
+  similarities <- numeric(0)
+  negative_lag_distance <- numeric(0)
+  for (subject_id in unique(visits_df$id)) {
+    index <- which(visits_df$id == subject_id)
+    if (length(index) < 2L) next
+    kernel <- evaluate_biomarker_kernel(
+      standardized[index, , drop = FALSE], builder = builder
+    )
+    lag_distance <- abs(outer(visits_df$lag[index], visits_df$lag[index], "-"))
+    upper <- upper.tri(kernel)
+    similarities <- c(similarities, kernel[upper])
+    negative_lag_distance <- c(negative_lag_distance, -lag_distance[upper])
+  }
+  if (length(similarities) < 3L || stats::sd(similarities) < 1e-12 ||
+      stats::sd(negative_lag_distance) < 1e-12) return(0)
+  value <- suppressWarnings(stats::cor(similarities, negative_lag_distance))
+  if (is.finite(value)) value else 0
 }
 
 #' @keywords internal
@@ -336,7 +428,7 @@ shift_ridge_matrix <- function(grid, n) {
 }
 
 #' @keywords internal
-constrained_grid_update <- function(loss, grid, anchor) {
+constrained_grid_update <- function(loss, grid, anchor, center_shift = NULL) {
   n <- nrow(loss)
   anchor <- as.matrix(anchor)
   if (nrow(anchor) != n) stop("anchor has the wrong number of rows.", call. = FALSE)
@@ -344,6 +436,11 @@ constrained_grid_update <- function(loss, grid, anchor) {
   upper <- max(grid)
   step <- as.numeric(silk_opt("SHIFT_GRID_STEP"))
   ridge <- shift_ridge_matrix(grid, n)
+  local_radius <- as.numeric(silk_opt("ALT_LOCAL_RADIUS"))[1L]
+  if (!is.null(center_shift) && is.finite(local_radius) && local_radius > 0) {
+    outside <- abs(outer(as.numeric(center_shift), grid, "-")) > local_radius + 1e-12
+    loss[outside] <- Inf
+  }
 
   choose_for_lambda <- function(lambda) {
     score <- as.vector(anchor %*% lambda)
@@ -417,13 +514,13 @@ constrained_grid_update <- function(loss, grid, anchor) {
 # ----------------------------- RKHS template --------------------------------
 
 #' @keywords internal
-prepare_registration_data <- function(visits_df) {
+prepare_registration_data <- function(visits_df, biomarker_kernel = NULL) {
   required <- c("id", "visit", "A_obs_il")
   missing_columns <- setdiff(required, names(visits_df))
   if (length(missing_columns)) {
     stop("Missing visit columns: ", paste(missing_columns, collapse = ", "), call. = FALSE)
   }
-  biomarker_builder <- make_biomarker_kernel_builder(visits_df)
+  biomarker_builder <- make_biomarker_kernel_builder(visits_df, biomarker_kernel)
   standardized <- apply_biomarker_builder(visits_df, biomarker_builder)
   input_builder <- make_input_kernel_builder(visits_df)
   positions <- sort(unique(visits_df$visit))
@@ -434,13 +531,16 @@ prepare_registration_data <- function(visits_df) {
     by_position[[as.character(position)]] <- list(
       row_index = index,
       B_std = biomarkers,
-      K_B = gaussian_rbf_kernel(biomarkers, bandwidth = biomarker_builder$bandwidth)
+      K_B = evaluate_biomarker_kernel(biomarkers, builder = biomarker_builder)
     )
   }
   list(
     biomarker_builder = biomarker_builder,
     input_builder = input_builder,
     B_std = standardized,
+    longitudinal_signal = longitudinal_kernel_signal(
+      visits_df, standardized, biomarker_builder
+    ),
     positions = positions,
     by_position = by_position
   )
@@ -459,6 +559,8 @@ build_position_template <- function(visits_df, subjects, shift, ids,
     stop("TEMPLATE_RIDGE_LAMBDA must be positive and finite.", call. = FALSE)
   }
   templates <- list()
+  clock_sse <- 0
+  clock_sst <- 0
 
   for (position in registration_data$positions) {
     key <- as.character(position)
@@ -482,6 +584,7 @@ build_position_template <- function(visits_df, subjects, shift, ids,
     templates[[key]] <- list(
       visit = position,
       B_train = cached$B_std,
+      landmark_observed = subjects$A_obs[match(position_visits$id, subjects$id)],
       K_B = cached$K_B,
       A = A,
       M_B = biomarker_quadratic,
@@ -489,6 +592,12 @@ build_position_template <- function(visits_df, subjects, shift, ids,
       rho = rho,
       numerical_jitter = factor$jitter
     )
+    clock_response <- templates[[key]]$landmark_observed
+    clock_prediction <- kernel_neighbour_prediction(
+      cached$K_B, clock_response, exclude_self = TRUE
+    )
+    clock_sse <- clock_sse + sum((clock_response - clock_prediction)^2)
+    clock_sst <- clock_sst + sum((clock_response - mean(clock_response))^2)
   }
 
   list(
@@ -497,15 +606,17 @@ build_position_template <- function(visits_df, subjects, shift, ids,
     positions = registration_data$positions,
     biomarker_builder = registration_data$biomarker_builder,
     input_builder = registration_data$input_builder,
-    biomarker_kernel = "gaussian_rbf",
+    biomarker_kernel = registration_data$biomarker_builder$kernel,
     characteristic = TRUE,
+    clock_signal_r2 = if (clock_sst > 0) 1 - clock_sse / clock_sst else NA_real_,
+    longitudinal_signal = registration_data$longitudinal_signal,
     template_ridge = lambda,
     number_positions = number_positions
   )
 }
 
 #' @keywords internal
-position_cross_basis <- function(template_position, query_biomarkers, bandwidth) {
+position_cross_basis <- function(template_position, query_biomarkers, biomarker_builder) {
   same_rows <- nrow(query_biomarkers) == nrow(template_position$B_train) &&
     ncol(query_biomarkers) == ncol(template_position$B_train) &&
     isTRUE(all.equal(
@@ -515,7 +626,9 @@ position_cross_basis <- function(template_position, query_biomarkers, bandwidth)
   cross_kernel <- if (same_rows) {
     template_position$K_B
   } else {
-    gaussian_rbf_kernel(template_position$B_train, query_biomarkers, bandwidth)
+    evaluate_biomarker_kernel(
+      template_position$B_train, query_biomarkers, builder = biomarker_builder
+    )
   }
   crossprod(template_position$A, cross_kernel)
 }
@@ -524,18 +637,18 @@ position_cross_basis <- function(template_position, query_biomarkers, bandwidth)
 rkhs_loss_from_summaries <- function(psi, cross_summary, biomarker_quadratic) {
   cross_term <- rowSums(psi * cross_summary)
   template_norm <- rowSums(psi * (psi %*% biomarker_quadratic))
-  # k_B(b,b)=1 for a Gaussian RBF kernel. Negative values below numerical zero
+  # k_B(b,b)=1 for every supported normalized kernel. Negative values below numerical zero
   # arise only from floating-point error in a positive-semidefinite expression.
   pmax(1 - 2 * cross_term + template_norm, 0)
 }
 
 #' @keywords internal
 position_loss_grid <- function(template_position, visits, query_biomarkers, grid,
-                               input_builder, bandwidth) {
+                               input_builder, biomarker_builder) {
   number_rows <- nrow(visits)
   number_grid <- length(grid)
   output <- matrix(NA_real_, nrow = number_rows, ncol = number_grid)
-  cross_basis <- position_cross_basis(template_position, query_biomarkers, bandwidth)
+  cross_basis <- position_cross_basis(template_position, query_biomarkers, biomarker_builder)
   query_chunk <- suppressWarnings(as.integer(silk_opt("TEMPLATE_QUERY_CHUNK"))[1L])
   if (!is.finite(query_chunk) || query_chunk < 1L) query_chunk <- 5000L
   grids_per_chunk <- max(1L, floor(query_chunk / max(1L, number_rows)))
@@ -556,8 +669,8 @@ position_loss_grid <- function(template_position, visits, query_biomarkers, grid
 
 #' @keywords internal
 position_loss_vector <- function(template_position, visits, query_biomarkers, shift,
-                                 input_builder, bandwidth) {
-  cross_basis <- position_cross_basis(template_position, query_biomarkers, bandwidth)
+                                 input_builder, biomarker_builder) {
+  cross_basis <- position_cross_basis(template_position, query_biomarkers, biomarker_builder)
   psi <- apply_input_kernel_builder(visits$A_obs_il - shift, visits, input_builder)
   rkhs_loss_from_summaries(psi, t(cross_basis), template_position$M_B)
 }
@@ -578,7 +691,7 @@ loss_grid_from_template <- function(template, visits_df, grid) {
     row_id <- match(position_visits$id, ids)
     loss <- position_loss_grid(
       template_position, position_visits, standardized[index, , drop = FALSE], grid,
-      template$input_builder, template$biomarker_builder$bandwidth
+      template$input_builder, template$biomarker_builder
     )
     aggregated <- rowsum(loss, row_id, reorder = FALSE)
     rows <- as.integer(rownames(aggregated))
@@ -609,7 +722,7 @@ registration_total_objective <- function(template, visits_df, shift, grid_dummy 
     row_id <- match(position_visits$id, ids)
     point_loss <- position_loss_vector(
       template_position, position_visits, standardized[index, , drop = FALSE],
-      shift[row_id], template$input_builder, template$biomarker_builder$bandwidth
+      shift[row_id], template$input_builder, template$biomarker_builder
     )
     aggregated <- rowsum(point_loss, row_id, reorder = FALSE)
     rows <- as.integer(rownames(aggregated))
@@ -647,7 +760,7 @@ fit_registration_train <- function(visits_df, subjects, init_e = NULL, grid,
       visits_df, subjects, shift, ids, registration_data = registration_data
     )
     loss <- loss_grid_from_template(template, visits_df, grid)
-    new_shift <- constrained_grid_update(loss, grid, anchor)
+    new_shift <- constrained_grid_update(loss, grid, anchor, center_shift = shift)
     objective <- registration_total_objective(template, visits_df, new_shift)
     objective_trace <- c(objective_trace, objective)
     max_change <- max(abs(new_shift - shift))
@@ -665,26 +778,94 @@ fit_registration_train <- function(visits_df, subjects, init_e = NULL, grid,
     ids = ids,
     obj_trace = objective_trace,
     grid = grid,
-    implementation = "exact Gaussian biomarker-kernel RKHS loss"
+    implementation = paste0(
+      "exact characteristic ",
+      biomarker_kernel_label(template$biomarker_builder$kernel),
+      " biomarker-kernel RKHS loss"
+    )
   )
 }
 
 #' @keywords internal
-fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL) {
+kernel_neighbour_prediction <- function(kernel, response, exclude_self = FALSE) {
+  kernel <- as.matrix(kernel)
+  response <- as.numeric(response)
+  if (ncol(kernel) != length(response)) {
+    stop("Kernel columns and clock responses have different lengths.", call. = FALSE)
+  }
+  if (isTRUE(exclude_self) && nrow(kernel) == ncol(kernel)) diag(kernel) <- 0
+  available <- ncol(kernel) - as.integer(isTRUE(exclude_self) && nrow(kernel) == ncol(kernel))
+  number_neighbours <- min(available, max(8L, ceiling(sqrt(ncol(kernel)))))
+  if (number_neighbours < 1L) return(rep(mean(response), nrow(kernel)))
+  vapply(seq_len(nrow(kernel)), function(row) {
+    order_index <- order(kernel[row, ], decreasing = TRUE)[seq_len(number_neighbours)]
+    weight <- pmax(kernel[row, order_index], 0)
+    if (!any(is.finite(weight)) || sum(weight, na.rm = TRUE) <= 1e-12) {
+      return(mean(response))
+    }
+    sum(weight * response[order_index]) / sum(weight)
+  }, numeric(1))
+}
+
+#' @keywords internal
+biomarker_clock_initial_shift <- function(visits_df, subjects, ids,
+                                          registration_data, grid) {
+  subject_landmark <- subjects$A_obs[match(ids, subjects$id)]
+  stage_sum <- numeric(length(ids))
+  stage_count <- integer(length(ids))
+  clock_sse <- 0
+  clock_sst <- 0
+  for (position in registration_data$positions) {
+    cached <- registration_data$by_position[[as.character(position)]]
+    index <- cached$row_index
+    if (length(index) < 3L) next
+    position_visits <- visits_df[index, , drop = FALSE]
+    row_subject <- match(position_visits$id, ids)
+    response <- subject_landmark[row_subject]
+    predicted_landmark <- kernel_neighbour_prediction(
+      cached$K_B, response, exclude_self = TRUE
+    )
+    clock_sse <- clock_sse + sum((response - predicted_landmark)^2)
+    clock_sst <- clock_sst + sum((response - mean(response))^2)
+    stage_sum[row_subject] <- stage_sum[row_subject] + predicted_landmark
+    stage_count[row_subject] <- stage_count[row_subject] + 1L
+  }
+  fallback <- mean(subject_landmark)
+  stage <- ifelse(stage_count > 0L, stage_sum / pmax(stage_count, 1L), fallback)
+  signal_r2 <- if (clock_sst > 0) 1 - clock_sse / clock_sst else NA_real_
+  longitudinal_signal <- registration_data$longitudinal_signal
+  signal_minimum <- as.numeric(silk_opt("CLOCK_SIGNAL_MIN"))[1L]
+  if (!is.finite(longitudinal_signal) || longitudinal_signal < signal_minimum) {
+    stage <- subject_landmark
+  }
+  anchor <- anchor_basis(subjects, ids)
+  shift <- project_to_anchor(subject_landmark - stage, anchor, min(grid), max(grid))
+  attr(shift, "clock_signal_r2") <- signal_r2
+  shift
+}
+
+#' @keywords internal
+fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
+                                        biomarker_kernel = NULL) {
   if (!is.null(seed)) set.seed(seed)
   ids <- sort(unique(visits_df$id))
   number_ids <- length(ids)
   anchor <- anchor_basis(subjects, ids)
-  registration_data <- prepare_registration_data(visits_df)
+  registration_data <- prepare_registration_data(visits_df, biomarker_kernel)
   number_starts <- suppressWarnings(as.integer(silk_opt("N_STARTS"))[1L])
   if (!is.finite(number_starts) || number_starts < 1L) number_starts <- 1L
   random_start_sd <- as.numeric(silk_opt("RANDOM_START_SD"))[1L]
 
-  starts <- list(zero = rep(0, number_ids))
-  if (number_starts >= 2L) {
-    for (index in 2:number_starts) {
-      starts[[paste0("random", index - 1L)]] <- project_to_anchor(
-        stats::rnorm(number_ids, sd = (index - 1L) * random_start_sd),
+  starts <- list(
+    biology_clock = biomarker_clock_initial_shift(
+      visits_df, subjects, ids, registration_data, grid
+    )
+  )
+  if (number_starts >= 2L) starts$zero <- rep(0, number_ids)
+  if (number_starts >= 3L) {
+    for (index in 3:number_starts) {
+      starts[[paste0("random", index - 2L)]] <- project_to_anchor(
+        stats::rnorm(number_ids, sd = (index - 2L) * random_start_sd),
         anchor, min(grid), max(grid)
       )
     }
@@ -751,11 +932,59 @@ refine_profile_min <- function(loss_row, grid) {
 }
 
 #' @keywords internal
+template_clock_initial_shift <- function(template, visits_df) {
+  ids <- sort(unique(visits_df$id))
+  signal_minimum <- as.numeric(silk_opt("CLOCK_SIGNAL_MIN"))[1L]
+  if (!is.finite(template$longitudinal_signal) ||
+      template$longitudinal_signal < signal_minimum) {
+    return(stats::setNames(rep(0, length(ids)), ids))
+  }
+  standardized <- apply_biomarker_builder(visits_df, template$biomarker_builder)
+  stage_sum <- numeric(length(ids))
+  stage_count <- integer(length(ids))
+  observed_landmark_sum <- numeric(length(ids))
+
+  for (position in sort(unique(visits_df$visit))) {
+    index <- which(visits_df$visit == position)
+    template_position <- template$templates[[as.character(position)]]
+    if (!length(index) || is.null(template_position)) next
+    position_visits <- visits_df[index, , drop = FALSE]
+    row_id <- match(position_visits$id, ids)
+    cross_kernel <- evaluate_biomarker_kernel(
+      standardized[index, , drop = FALSE], template_position$B_train,
+      builder = template$biomarker_builder
+    )
+    predicted_landmark <- kernel_neighbour_prediction(
+      cross_kernel, template_position$landmark_observed, exclude_self = FALSE
+    )
+    stage_sum[row_id] <- stage_sum[row_id] + predicted_landmark
+    observed_landmark_sum[row_id] <- observed_landmark_sum[row_id] +
+      position_visits$A_obs_il + position_visits$lag
+    stage_count[row_id] <- stage_count[row_id] + 1L
+  }
+  observed_landmark <- observed_landmark_sum / pmax(stage_count, 1L)
+  stage <- stage_sum / pmax(stage_count, 1L)
+  shift <- observed_landmark - stage
+  shift[stage_count == 0L | !is.finite(shift)] <- 0
+  stats::setNames(shift, ids)
+}
+
+#' @keywords internal
 predict_registration_shift <- function(template, visits_df, grid) {
   ids <- sort(unique(visits_df$id))
   loss <- loss_grid_from_template(template, visits_df, grid)
   ridge <- shift_ridge_matrix(grid, nrow(loss))
   selection_loss <- if (is.null(ridge)) loss else loss + ridge
+  clock_shift <- template_clock_initial_shift(template, visits_df)
+  clock_center <- pmin(pmax(
+    as.numeric(clock_shift[match(ids, names(clock_shift))]), min(grid)
+  ), max(grid))
+  search_radius <- as.numeric(silk_opt("PROFILE_SEARCH_RADIUS"))[1L]
+  if (is.finite(search_radius) && search_radius > 0) {
+    outside <- abs(outer(clock_center, grid, "-")) >
+      search_radius + 1e-12
+    selection_loss[outside] <- Inf
+  }
   best <- max.col(-selection_loss, ties.method = "first")
   refined <- vapply(
     seq_along(ids), function(index) refine_profile_min(selection_loss[index, ], grid),
@@ -764,6 +993,7 @@ predict_registration_shift <- function(template, visits_df, grid) {
   data.frame(
     id = ids,
     e_hat = refined,
+    e_clock = clock_center,
     e_hat_grid = grid[best],
     min_loss = loss[cbind(seq_along(ids), best)],
     at_boundary = best %in% c(1L, length(grid)),
@@ -782,7 +1012,8 @@ predict_registration_shift <- function(template, visits_df, grid) {
 }
 
 #' @keywords internal
-crossfit_registration <- function(train_visits, train_subjects, grid, seed = NULL) {
+crossfit_registration <- function(train_visits, train_subjects, grid, seed = NULL,
+                                  biomarker_kernel = NULL) {
   if (!is.null(seed)) set.seed(seed)
   ids <- sort(unique(train_visits$id))
   number_ids <- length(ids)
@@ -790,9 +1021,10 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
   requested_folds <- suppressWarnings(as.integer(silk_opt("N_FOLDS"))[1L])
   if (!is.finite(requested_folds) || requested_folds < 2L) requested_folds <- 2L
   number_folds <- min(requested_folds, number_ids)
+  biomarker_kernel <- normalize_biomarker_kernel(biomarker_kernel)
   fold <- sample(rep(seq_len(number_folds), length.out = number_ids))
   output <- data.frame(
-    id = ids, e_hat = NA_real_, S_hat = NA_real_, fold = fold,
+    id = ids, e_hat = NA_real_, e_clock = NA_real_, S_hat = NA_real_, fold = fold,
     at_boundary = NA, gap_q1 = NA_real_, gap_q2 = NA_real_,
     stringsAsFactors = FALSE
   )
@@ -805,7 +1037,8 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
     hold_visits <- train_visits[train_visits$id %in% hold_ids, , drop = FALSE]
     fit <- fit_registration_multistart(
       fit_visits, fit_subjects, grid,
-      seed = if (!is.null(seed)) seed + fold_index else NULL
+      seed = if (!is.null(seed)) seed + fold_index else NULL,
+      biomarker_kernel = biomarker_kernel
     )
     predict_registration_shift(fit$template, hold_visits, grid)
   })
@@ -813,6 +1046,7 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
   for (prediction in fold_results) {
     row <- match(prediction$id, output$id)
     output$e_hat[row] <- prediction$e_hat
+    output$e_clock[row] <- prediction$e_clock
     output$at_boundary[row] <- prediction$at_boundary
     output$gap_q1[row] <- prediction$gap_q1
     output$gap_q2[row] <- prediction$gap_q2
@@ -823,7 +1057,8 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
   output$S_hat <- train_subjects$A_obs[subject_order] - output$e_hat
   final_fit <- fit_registration_multistart(
     train_visits, train_subjects, grid,
-    seed = if (!is.null(seed)) seed + 777L else NULL
+    seed = if (!is.null(seed)) seed + 777L else NULL,
+    biomarker_kernel = biomarker_kernel
   )
   structure(
     list(
@@ -831,9 +1066,9 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
       final_fit = final_fit,
       final_template = final_fit$template,
       grid = grid,
-      biomarker_kernel = "gaussian_rbf",
+      biomarker_kernel = final_fit$template$biomarker_builder$kernel,
       characteristic = TRUE,
-      implementation = "exact characteristic Gaussian biomarker-kernel RKHS loss"
+      implementation = final_fit$implementation
     ),
     class = "silk_registration"
   )

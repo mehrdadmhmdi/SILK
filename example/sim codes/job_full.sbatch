@@ -2,9 +2,9 @@
 #SBATCH --job-name=silk-submit
 #SBATCH --account=bhmn-delta-cpu
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=4G
-#SBATCH --time=01:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=24G
+#SBATCH --time=04:00:00
 #SBATCH --output=slurm-%x-%j.out
 
 set -euo pipefail
@@ -26,8 +26,8 @@ cd "$SIM_DIR"
 export SILK_OUT_DIR="${SILK_OUT_DIR:-$SIM_DIR/outputs}"
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
 
-# Clone and install the GitHub package once. Every array worker receives this
-# private library through --export=ALL and never installs the package itself.
+# Prepare or reuse one persistent R/Python environment. Every array worker
+# receives it through --export=ALL and never installs software itself.
 source "$SIM_DIR/cluster_prepare_package.sh"
 
 Rscript -e 'source(file.path("R", "run_simulation_comparisons.R")); source_silk_prediction_modules(); source(file.path("R", "resource_tasks.R")); write_resource_task_lists()'

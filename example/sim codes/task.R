@@ -15,6 +15,7 @@ per_horizon_file <- file.path(RAW_DIR, sprintf("prediction_per_horizon_task_%04d
 paired_file <- file.path(RAW_DIR, sprintf("prediction_paired_task_%04d.csv", cell$task_id))
 calibration_file <- file.path(RAW_DIR, sprintf("prediction_calibration_task_%04d.csv", cell$task_id))
 status_file <- file.path(RAW_DIR, sprintf("prediction_status_task_%04d.csv", cell$task_id))
+registration_file <- file.path(RAW_DIR, sprintf("registration_diagnostics_task_%04d.csv", cell$task_id))
 error_file <- file.path(RAW_DIR, sprintf("prediction_failed_task_%04d.csv", cell$task_id))
 
 res <- tryCatch(
@@ -47,7 +48,11 @@ if (is.data.frame(res) && identical(res$success[1], FALSE)) {
   write.csv(res$paired, paired_file, row.names = FALSE)
   write.csv(res$calibration_bins, calibration_file, row.names = FALSE)
   write.csv(res$method_status, status_file, row.names = FALSE)
+  if (nrow(res$registration_diagnostics)) {
+    write.csv(res$registration_diagnostics, registration_file, row.names = FALSE)
+  }
   cat("Wrote", pred_file, "\n")
   cat("Wrote", metric_file, "\n")
   cat("Wrote", status_file, "\n")
+  if (nrow(res$registration_diagnostics)) cat("Wrote", registration_file, "\n")
 }

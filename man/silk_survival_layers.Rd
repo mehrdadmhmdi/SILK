@@ -30,7 +30,8 @@ fit_beran_silk(
   shift_grid = NULL,
   shift_range = NULL,
   seed = NULL,
-  registration = NULL
+  registration = NULL,
+  biomarker_kernel = NULL
 )
 
 predict_beran_silk(
@@ -97,6 +98,9 @@ predict_beran_oracle_latent_age(
 \item{registration}{Optional fitted object from
 \code{fit_silk_registration}; supplying it lets Cox and Beran survival
 layers share one registration fit.}
+
+\item{biomarker_kernel}{Optional characteristic biomarker kernel used when
+a registration is fitted internally.}
 
 \item{test_visits}{Test visit data frame.}
 }

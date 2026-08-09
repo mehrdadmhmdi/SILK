@@ -2,7 +2,7 @@
 % Please edit documentation in R/silk-method.R
 \name{predict_same_feature_recorded_cox}
 \alias{predict_same_feature_recorded_cox}
-\title{Predict from the same-feature recorded-age Cox comparator}
+\title{Predict from the recorded-clock Cox comparator}
 \usage{
 predict_same_feature_recorded_cox(
   fit,
@@ -36,5 +36,5 @@ predict_same_feature_recorded_cox(
 A prediction frame.
 }
 \description{
-Predict from the same-feature recorded-age Cox comparator
+Predict from the recorded-clock Cox comparator
 }

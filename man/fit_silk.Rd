@@ -11,7 +11,8 @@ fit_silk(
   seed = NULL,
   shift_range = NULL,
   method = "SILK",
-  registration = NULL
+  registration = NULL,
+  biomarker_kernel = NULL
 )
 }
 \arguments{
@@ -33,6 +34,9 @@ candidate shift values. Defaults to \code{DEFAULT_SHIFT_GRID_MIN} and
 \item{registration}{Optional fitted object from
 \code{fit_silk_registration}. Supplying it lets multiple survival layers
 reuse exactly the same cross-fitted registration.}
+
+\item{biomarker_kernel}{Optional characteristic biomarker kernel used when
+\code{registration} is not supplied.}
 }
 \value{
 A fitted SILK model object (list) for use with \code{predict_silk}.

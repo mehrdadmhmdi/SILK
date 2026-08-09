@@ -8,8 +8,9 @@ silk_options(...)
 }
 \arguments{
 \item{...}{Named arguments where names are option names and values are the
-new option values. Registration uses a fixed exact Gaussian RBF biomarker
-kernel. Its bandwidth is controlled by \code{BIOMARKER_BANDWIDTH};
+new option values. Registration uses an exact characteristic biomarker
+kernel selected by \code{BIOMARKER_KERNEL}; its bandwidth is controlled by
+\code{BIOMARKER_BANDWIDTH}.
 \code{TEMPLATE_INPUT_FEATURES} and the \code{H_*_BANDWIDTH} options control
 only the scalar template-input kernel.}
 }

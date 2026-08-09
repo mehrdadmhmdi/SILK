@@ -49,6 +49,9 @@ silk_default_options <- function() {
     # DGM parameters
     SURV_LAMBDA_D = 10.0,
     SURV_KAPPA_D = 1.35,
+    # Primary origin-time DGM: Gompertz baseline hazard on attained age.
+    SURV_AGE_BASE_RATE = 0.04,
+    SURV_AGE_GROWTH = 0.18,
     SURV_BETA_A = 0.95,
     SURV_BETA_X1 = 0.20,
     SURV_BETA_X2 = 0.15,
@@ -72,9 +75,10 @@ silk_default_options <- function() {
     SHIFT_GRID_STEP = 0.2,
     DEFAULT_SHIFT_GRID_MIN = -8,
     DEFAULT_SHIFT_GRID_MAX = 8,
-    # The biomarker kernel is deliberately not configurable: SILK always uses
-    # an exact Gaussian RBF kernel, which is characteristic on Euclidean
-    # biomarker space. The bandwidth may be data-adaptive or fixed.
+    # Every supported biomarker kernel is evaluated exactly and is
+    # characteristic on Euclidean biomarker space. No finite biomarker feature
+    # map is used.
+    BIOMARKER_KERNEL = "gaussian",
     BIOMARKER_BANDWIDTH = "median",
     BIOMARKER_BANDWIDTH_MAX_POINTS = 500L,
 
@@ -92,12 +96,17 @@ silk_default_options <- function() {
     H_LAG_BANDWIDTH = 0.50,
     N_ALT_ITER_MAX = 7L,
     ALT_TOL = 1e-3,
-    N_STARTS = 4L,
+    ALT_LOCAL_RADIUS = 2.0,
+    # Deterministic biomarker-clock initialization is the confirmatory default.
+    # Extra zero/random starts are optional algorithmic sensitivities.
+    N_STARTS = 1L,
     RANDOM_START_SD = 0.75,
     N_FOLDS = 5L,
     ANCHOR_MODE = "rx",
     PROFILE_TEMPERATURE = 0.015,
     PROFILE_LOCAL_RADIUS = 0.8,
+    PROFILE_SEARCH_RADIUS = 2.0,
+    CLOCK_SIGNAL_MIN = 0.10,
 
     # Parallelism for the cross-fitted registration folds. Default "auto" uses
     # every available core: it honours SILK_N_CORES, then the cluster
@@ -118,16 +127,16 @@ silk_default_options <- function() {
     METHODS = c(
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
       "MMLM-Recorded", "JM-Recorded",
-      "RSF-Observed", "DeepSurv-Observed", "Bayesian-Dynamic-Observed",
-      "TimeError-Integrated-Landmark", "SILK",
+      "RSF-Observed", "DeepSurv-Observed",
+      "TimeError-Integrated-Landmark", "SILK", "SILK-Laplace", "SILK-Matern32",
       "Beran-Recorded", "Beran-SILK",
       "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
     ),
     METHOD_ORDER = c(
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
       "MMLM-Recorded", "JM-Recorded",
-      "RSF-Observed", "DeepSurv-Observed", "Bayesian-Dynamic-Observed",
-      "TimeError-Integrated-Landmark", "SILK",
+      "RSF-Observed", "DeepSurv-Observed",
+      "TimeError-Integrated-Landmark", "SILK", "SILK-Laplace", "SILK-Matern32",
       "Beran-Recorded", "Beran-SILK",
       "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
     ),
@@ -135,7 +144,8 @@ silk_default_options <- function() {
     SURVIVAL_HISTORY_BIOMARKERS = 3L,
     SURVIVAL_HISTORY_KEEP = c("X1", "X2"),
 
-    # Scenario definitions
+    # Scenario definitions. The primary error SDs 2.5 and 5 imply age
+    # reliabilities of approximately 0.46 and 0.18 for A* ~ Uniform(24, 32).
     SCENARIOS = data.frame(
       scenario = c(
         "no_error", "mean_moderate", "mean_severe", "mean_strong_dense",
@@ -145,12 +155,12 @@ silk_default_options <- function() {
       ),
       biomarker_signal = c(
         "mean", "mean", "mean", "mean_strong", "distribution", "distribution",
-        "distribution_strong", "weak", "mean", "mean", "mean", "mean"
+        "distribution_strong", "stage_null", "mean", "mean", "mean", "mean"
       ),
       default_schedule = c(
         "m4", "m4", "m4", "m12", "m4", "m4", "m12", "m4", "m4", "m4", "m4", "m4"
       ),
-      sigma_eps = c(0, 3.0, 10.0, 10.0, 3.0, 10.0, 10.0, 10.0, 6.0, 10.0, 10.0, 10.0),
+      sigma_eps = c(0, 2.5, 5.0, 5.0, 2.5, 5.0, 5.0, 5.0, 4.0, 5.0, 5.0, 5.0),
       eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 2.5, 0, 0, 0),
       eps_type = c(
         "normal", "normal", "mixture", "mixture", "normal", "mixture",
@@ -159,15 +169,15 @@ silk_default_options <- function() {
       n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
       missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
       irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
-      shift_min = c(-4, -12, -30, -30, -12, -30, -30, -30, -24, -35, -35, -30),
-      shift_max = c( 4,  12,  30,  30,  12,  30,  30,  30,  30,  35,  35,  30),
-      signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.08, 2.00, 2.00, 2.00, 2.00),
+      shift_min = c(-4, -8, -15, -15, -8, -15, -15, -15, -12, -20, -20, -15),
+      shift_max = c( 4,  8,  15,  15,  8,  15,  15,  15,  16,  20,  20,  15),
+      signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.00, 2.00, 2.00, 2.00, 2.00),
       sigma_bio = c(0.70, 0.60, 0.50, 0.22, 0.70, 0.60, 0.30, 1.45, 0.55, 0.55, 0.55, 0.65),
-      u_bio_coef = c(0.15, 0.12, 0.08, 0.02, 0.12, 0.08, 0.02, 0.20, 0.10, 0.10, 0.10, 0.10),
+      u_bio_coef = rep(0, 12),
       dist_sd_base = c(0.45, 0.45, 0.45, 0.45, 0.36, 0.22, 0.14, 0.45, 0.45, 0.45, 0.45, 0.45),
       dist_sd_slope = c(0.18, 0.18, 0.18, 0.18, 0.35, 0.85, 1.25, 0.18, 0.18, 0.18, 0.18, 0.18),
-      risk_beta_A = c(0.95, 1.05, 1.65, 2.10, 1.05, 1.65, 2.10, 1.10, 1.20, 1.20, 1.20, 1.20),
-      risk_beta_U = c(0.15, 0.12, 0.08, 0.03, 0.12, 0.08, 0.03, 0.18, 0.10, 0.10, 0.10, 0.10),
+      risk_age_growth = rep(0.18, 12),
+      risk_beta_U = rep(0, 12),
       description = c(
         "No origin error; calibration should not help and may add noise.",
         "Mean-stage biomarkers; moderate common origin error.",
@@ -176,7 +186,7 @@ silk_default_options <- function() {
         "Distributional biomarkers; moderate common origin error.",
         "Distributional biomarkers; severe common origin error.",
         "Favorable distributional sanity regime: severe error, strong dispersion signal, dense visits.",
-        "Weak-stage negative-control regime.",
+        "Prespecified stage-null negative control: biomarkers contain no latent-age or frailty signal.",
         "Biased-shift sensitivity regime; mean-zero anchor is misspecified.",
         "Heavy-tailed common-shift regime.",
         "Asymmetric common-shift regime.",
@@ -209,9 +219,12 @@ silk_default_options <- function() {
       "JM-Recorded" = "JM-Recorded",
       "RSF-Observed" = "RSF-Observed",
       "DeepSurv-Observed" = "DeepSurv-Observed",
-      "Bayesian-Dynamic-Observed" = "Bayesian-Dynamic-Observed",
       "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
-      SILK = "SILK-Cox",
+      SILK = "SILK-Cox (Gaussian)",
+      "SILK-Laplace" = "SILK-Cox (Laplace)",
+      "SILK-Matern32" = "SILK-Cox (Matern-3/2)",
+      "Cox-History-Recorded" = "Recorded-Cox + history (suppl.)",
+      "SILK-History" = "SILK-Cox + history (suppl.)",
       "Beran-Recorded" = "Recorded-Beran",
       "Beran-SILK" = "SILK-Beran",
       "Beran-Oracle-Latent-Age" = "Oracle-Beran",
@@ -338,8 +351,9 @@ silk_resolve_cores <- function() {
 #' Sets one or more SILK package options.
 #'
 #' @param ... Named arguments where names are option names and values are the
-#'   new option values. Registration uses a fixed exact Gaussian RBF biomarker
-#'   kernel. Its bandwidth is controlled by \code{BIOMARKER_BANDWIDTH};
+#'   new option values. Registration uses an exact characteristic biomarker
+#'   kernel selected by \code{BIOMARKER_KERNEL}; its bandwidth is controlled by
+#'   \code{BIOMARKER_BANDWIDTH}.
 #'   \code{TEMPLATE_INPUT_FEATURES} and the \code{H_*_BANDWIDTH} options control
 #'   only the scalar template-input kernel.
 #' @return Invisible NULL.

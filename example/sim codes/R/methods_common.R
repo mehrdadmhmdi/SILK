@@ -96,6 +96,24 @@ step_eval <- function(times, values, grid) {
   out
 }
 
+step_eval_survival <- function(times, surv, grid) {
+  times <- as.numeric(times)
+  surv <- as.numeric(surv)
+  grid <- as.numeric(grid)
+  keep <- is.finite(times) & is.finite(surv)
+  if (!any(keep)) return(rep(1, length(grid)))
+  z <- data.frame(time = c(0, times[keep]), surv = c(1, surv[keep]))
+  z <- z[order(z$time), , drop = FALSE]
+  z <- z[!duplicated(z$time, fromLast = TRUE), , drop = FALSE]
+  out <- rep(1, length(grid))
+  valid <- is.finite(grid)
+  if (any(valid)) {
+    index <- findInterval(grid[valid], z$time)
+    out[valid] <- z$surv[pmax(index, 1L)]
+  }
+  out
+}
+
 fit_km_model <- function(time, status) {
   fit <- survival::survfit(survival::Surv(time, status) ~ 1)
   list(time = fit$time, surv = fit$surv)
@@ -327,11 +345,77 @@ landmark_covariates <- function(subjects, visits = NULL, clock = c("recorded", "
 
 observed_profile_covariates <- function(subjects, visits = NULL,
                                         include_biomarker = OBSERVED_ML_USE_CURRENT_BIOMARKER) {
-  x <- cbind(landmark_age = subjects$A_obs, base_covariates(subjects))
   if (isTRUE(include_biomarker) && !is.null(visits)) {
-    x <- cbind(x, current_biomarker = current_marker_value(subjects, visits, "recorded"))
+    return(recorded_same_feature_covariates(subjects, visits))
   }
-  x
+  cbind(landmark_age = subjects$A_obs, base_covariates(subjects))
+}
+
+history_ablation_covariates <- function(subjects, visits) {
+  history <- make_history_features(subjects, visits)
+  history <- history[match(subjects$id, history$id), , drop = FALSE]
+  current_names <- intersect(
+    paste0("current_B", seq_len(SURVIVAL_HISTORY_BIOMARKERS)), names(history)
+  )
+  keep <- intersect(
+    c("X1", "X2", current_names, "mean_B", "sd_B", "visit_count", "span"),
+    names(history)
+  )
+  as.matrix(history[, keep, drop = FALSE])
+}
+
+fit_recorded_history_ablation <- function(train_subjects, train_visits) {
+  x <- history_ablation_covariates(train_subjects, train_visits)
+  list(
+    method = "Cox-History-Recorded",
+    fit = fit_age_scale_cox(train_subjects, train_subjects$A_obs, x),
+    implementation = "supplementary attained-age Cox with recorded clock and observed history"
+  )
+}
+
+predict_recorded_history_ablation <- function(fit, test_subjects, test_visits,
+                                               horizons = PREDICTION_HORIZONS,
+                                               fold_id = 1L, replicate_id = 1L,
+                                               n_train_setting = NA,
+                                               time_grid_setting = NA) {
+  x <- history_ablation_covariates(test_subjects, test_visits)
+  risk <- predict_age_scale_cox_risk(fit$fit, test_subjects$A_obs, x, horizons)
+  prediction_frame(
+    test_subjects, test_subjects$A_obs, horizons, risk,
+    method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
+  )
+}
+
+fit_silk_history_ablation <- function(train_subjects, train_visits, registration) {
+  stage <- registration$train_stage$S_hat[
+    match(train_subjects$id, registration$train_stage$id)
+  ]
+  x <- history_ablation_covariates(train_subjects, train_visits)
+  list(
+    method = "SILK-History",
+    fit = fit_age_scale_cox(train_subjects, stage, x),
+    registration = registration,
+    grid = registration$grid,
+    implementation = paste(
+      registration$implementation,
+      "+ supplementary observed-history survival covariates"
+    )
+  )
+}
+
+predict_silk_history_ablation <- function(fit, test_subjects, test_visits,
+                                           horizons = PREDICTION_HORIZONS,
+                                           fold_id = 1L, replicate_id = 1L,
+                                           n_train_setting = NA,
+                                           time_grid_setting = NA) {
+  shift <- predict_silk_registration(fit$registration, test_visits)
+  stage <- test_subjects$A_obs - shift$e_hat[match(test_subjects$id, shift$id)]
+  x <- history_ablation_covariates(test_subjects, test_visits)
+  risk <- predict_age_scale_cox_risk(fit$fit, stage, x, horizons)
+  prediction_frame(
+    test_subjects, stage, horizons, risk,
+    method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
+  )
 }
 
 align_covariate_columns <- function(x, column_names) {

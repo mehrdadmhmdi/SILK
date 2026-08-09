@@ -19,6 +19,7 @@ cd "$SIM_DIR"
 : "${SILK_TASK_LIST_FILE:?SILK_TASK_LIST_FILE was not exported by job_full.sbatch}"
 : "${SLURM_ARRAY_TASK_ID:?This worker must run as a Slurm array task}"
 : "${SILK_R_LIB:?SILK_R_LIB was not prepared by cluster_prepare_package.sh}"
+: "${SILK_PY_ENV:?SILK_PY_ENV was not prepared by cluster_prepare_package.sh}"
 
 mapfile -t task_ids < "$SILK_TASK_LIST_FILE"
 array_index=$((SLURM_ARRAY_TASK_ID - 1))
@@ -44,9 +45,19 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
+export CUDA_VISIBLE_DEVICES=""
+export RETICULATE_PYTHON="$SILK_PY_ENV/bin/python"
+export PYTHONNOUSERSITE=1
 
 export R_LIBS="$SILK_R_LIB${R_LIBS:+:$R_LIBS}"
-Rscript -e 'library(SILK); stopifnot(is.function(fit_silk_registration), identical(silk_default_options()$BIOMARKER_BANDWIDTH, "median"))'
+Rscript --vanilla -e '
+  library(SILK)
+  stopifnot(
+    is.function(fit_silk_registration),
+    identical(silk_default_options()$BIOMARKER_KERNEL, "gaussian"),
+    reticulate::py_module_available("pycox")
+  )
+'
 
 echo "Task $SILK_TASK_ID; class ${SILK_RESOURCE_CLASS:-unclassified}; registration cores $SILK_N_CORES; method cores $SILK_METHOD_CORES"
 exec Rscript "$SIM_DIR/task.R"

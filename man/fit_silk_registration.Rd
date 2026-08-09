@@ -9,7 +9,8 @@ fit_silk_registration(
   train_visits,
   shift_grid = NULL,
   shift_range = NULL,
-  seed = NULL
+  seed = NULL,
+  biomarker_kernel = NULL
 )
 }
 \arguments{
@@ -23,6 +24,9 @@ fit_silk_registration(
 when \code{shift_grid} is omitted.}
 
 \item{seed}{Integer or NULL. Random seed for folds and multistart fitting.}
+
+\item{biomarker_kernel}{Character kernel name: \code{"gaussian"},
+\code{"laplace"}, or \code{"matern32"}. NULL uses the package default.}
 }
 \value{
 A \code{silk_registration} object containing cross-fitted training
@@ -30,8 +34,8 @@ A \code{silk_registration} object containing cross-fitted training
 }
 \description{
 Estimates subject-specific origin shifts by cross-fitted registration. The
-biomarker discrepancy is the exact RKHS loss induced by a Gaussian RBF
-kernel on standardized biomarker vectors. This kernel is characteristic;
-the implementation does not replace it with biomarker moments or a finite
-biomarker feature map.
+biomarker discrepancy is the exact RKHS loss induced by a supported
+characteristic kernel on standardized biomarker vectors. Gaussian RBF,
+Laplace, and Matern-3/2 kernels are available; none is replaced by biomarker
+moments or a finite biomarker feature map.
 }

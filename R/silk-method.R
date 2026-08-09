@@ -44,10 +44,10 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' Fit the SILK registration layer
 #'
 #' Estimates subject-specific origin shifts by cross-fitted registration. The
-#' biomarker discrepancy is the exact RKHS loss induced by a Gaussian RBF
-#' kernel on standardized biomarker vectors. This kernel is characteristic;
-#' the implementation does not replace it with biomarker moments or a finite
-#' biomarker feature map.
+#' biomarker discrepancy is the exact RKHS loss induced by a supported
+#' characteristic kernel on standardized biomarker vectors. Gaussian RBF,
+#' Laplace, and Matern-3/2 kernels are available; none is replaced by biomarker
+#' moments or a finite biomarker feature map.
 #'
 #' @param train_subjects Data frame of training subjects.
 #' @param train_visits Data frame of training visits with biomarker columns.
@@ -55,14 +55,19 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' @param shift_range Numeric vector of length two used to construct the grid
 #'   when \code{shift_grid} is omitted.
 #' @param seed Integer or NULL. Random seed for folds and multistart fitting.
+#' @param biomarker_kernel Character kernel name: \code{"gaussian"},
+#'   \code{"laplace"}, or \code{"matern32"}. NULL uses the package default.
 #' @return A \code{silk_registration} object containing cross-fitted training
 #'   shifts and the final template used for new subjects.
 #' @export
 fit_silk_registration <- function(train_subjects, train_visits,
                                   shift_grid = NULL, shift_range = NULL,
-                                  seed = NULL) {
+                                  seed = NULL, biomarker_kernel = NULL) {
   grid <- resolve_silk_shift_grid(shift_grid, shift_range)
-  crossfit_registration(train_visits, train_subjects, grid = grid, seed = seed)
+  crossfit_registration(
+    train_visits, train_subjects, grid = grid, seed = seed,
+    biomarker_kernel = biomarker_kernel
+  )
 }
 
 #' Predict origin shifts from a SILK registration
@@ -119,6 +124,8 @@ validate_silk_registration <- function(registration, train_subjects) {
 #' @param registration Optional fitted object from
 #'   \code{fit_silk_registration}. Supplying it lets multiple survival layers
 #'   reuse exactly the same cross-fitted registration.
+#' @param biomarker_kernel Optional characteristic biomarker kernel used when
+#'   \code{registration} is not supplied.
 #' @return A fitted SILK model object (list) for use with \code{predict_silk}.
 #' @export
 #' @examples
@@ -127,14 +134,21 @@ validate_silk_registration <- function(registration, train_subjects) {
 #' fit <- fit_silk(dat$subjects, dat$visits, shift_range = c(-12, 12), seed = 1)
 #' }
 fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NULL,
-                     shift_range = NULL, method = "SILK", registration = NULL) {
+                     shift_range = NULL, method = "SILK", registration = NULL,
+                     biomarker_kernel = NULL) {
   if (is.null(registration)) {
     registration <- fit_silk_registration(
       train_subjects, train_visits,
-      shift_grid = shift_grid, shift_range = shift_range, seed = seed
+      shift_grid = shift_grid, shift_range = shift_range, seed = seed,
+      biomarker_kernel = biomarker_kernel
     )
   } else {
     registration <- validate_silk_registration(registration, train_subjects)
+    if (!is.null(biomarker_kernel) && !identical(
+      normalize_biomarker_kernel(biomarker_kernel), registration$biomarker_kernel
+    )) {
+      stop("The supplied registration and requested biomarker kernel differ.", call. = FALSE)
+    }
     if (!is.null(shift_grid) || !is.null(shift_range)) {
       requested_grid <- resolve_silk_shift_grid(shift_grid, shift_range)
       if (!isTRUE(all.equal(requested_grid, registration$grid))) {
@@ -143,48 +157,51 @@ fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NUL
     }
   }
   grid <- registration$grid
-  train_history <- make_history_features(train_subjects, train_visits)
   train_stage <- registration$train_stage$S_hat[
     match(train_subjects$id, registration$train_stage$id)
   ]
-  x <- silk_history_covariates(train_subjects, train_history, train_stage)
-  risk_fit <- fit_residual_cox(train_subjects, x)
+  x <- base_covariates(train_subjects)
+  risk_fit <- fit_age_scale_cox(train_subjects, train_stage, x)
+  builder <- registration$final_template$biomarker_builder
   list(
     method = method,
     grid = grid,
     shift_grid = grid,
     shift_range = range(grid),
     biomarker_kernel = list(
-      name = "gaussian_rbf",
+      name = builder$kernel,
       characteristic = TRUE,
-      bandwidth = registration$final_template$biomarker_builder$bandwidth,
-      bandwidth_rule = registration$final_template$biomarker_builder$bandwidth_rule
+      bandwidth = builder$bandwidth,
+      bandwidth_rule = builder$bandwidth_rule
     ),
     registration = registration,
-    train_history = train_history,
     train_stage = train_stage,
     fit = risk_fit,
+    survival_time_scale = "attained_age",
     implementation = registration$implementation
   )
 }
 
-#' Fit the same-feature recorded-age Cox comparator
+#' Fit the recorded-clock Cox comparator
 #'
-#' Uses the same biomarker-history feature vector as SILK but keeps recorded age.
+#' Uses the same attained-age Cox model and baseline covariates as SILK but
+#' retains recorded age as the time coordinate. Biomarkers enter SILK only
+#' through registration in this primary clock-isolation comparison.
 #'
 #' @param train_subjects Data frame of training subjects.
 #' @param train_visits Data frame of training visits.
 #' @return Fitted comparator object.
 #' @export
 fit_same_feature_recorded_cox <- function(train_subjects, train_visits) {
-  x <- recorded_same_feature_covariates(train_subjects, train_visits)
+  x <- base_covariates(train_subjects)
   list(
     method = "Cox-SameFeature-Recorded",
-    fit = fit_residual_cox(train_subjects, x)
+    fit = fit_age_scale_cox(train_subjects, train_subjects$A_obs, x),
+    survival_time_scale = "attained_age"
   )
 }
 
-#' Predict from the same-feature recorded-age Cox comparator
+#' Predict from the recorded-clock Cox comparator
 #'
 #' @param fit Fitted object from \code{fit_same_feature_recorded_cox}.
 #' @param test_subjects Data frame of test subjects.
@@ -202,8 +219,8 @@ predict_same_feature_recorded_cox <- function(fit, test_subjects, test_visits,
                                               n_train_setting = NA,
                                               time_grid_setting = NA) {
   if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
-  x <- recorded_same_feature_covariates(test_subjects, test_visits)
-  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
+  x <- base_covariates(test_subjects)
+  risk <- predict_age_scale_cox_risk(fit$fit, test_subjects$A_obs, x, horizons)
   prediction_frame(
     test_subjects,
     landmark = test_subjects$A_obs,
@@ -233,6 +250,8 @@ predict_same_feature_recorded_cox <- function(fit, test_subjects, test_visits,
 #' @param registration Optional fitted object from
 #'   \code{fit_silk_registration}; supplying it lets Cox and Beran survival
 #'   layers share one registration fit.
+#' @param biomarker_kernel Optional characteristic biomarker kernel used when
+#'   a registration is fitted internally.
 #' @param fold_id Fold identifier for bookkeeping.
 #' @param replicate_id Replicate identifier for bookkeeping.
 #' @param n_train_setting Training-size label for bookkeeping.
@@ -268,14 +287,21 @@ predict_beran_recorded <- function(fit, test_subjects,
 #' @rdname silk_survival_layers
 #' @export
 fit_beran_silk <- function(train_subjects, train_visits, shift_grid = NULL,
-                           shift_range = NULL, seed = NULL, registration = NULL) {
+                           shift_range = NULL, seed = NULL, registration = NULL,
+                           biomarker_kernel = NULL) {
   if (is.null(registration)) {
     registration <- fit_silk_registration(
       train_subjects, train_visits,
-      shift_grid = shift_grid, shift_range = shift_range, seed = seed
+      shift_grid = shift_grid, shift_range = shift_range, seed = seed,
+      biomarker_kernel = biomarker_kernel
     )
   } else {
     registration <- validate_silk_registration(registration, train_subjects)
+    if (!is.null(biomarker_kernel) && !identical(
+      normalize_biomarker_kernel(biomarker_kernel), registration$biomarker_kernel
+    )) {
+      stop("The supplied registration and requested biomarker kernel differ.", call. = FALSE)
+    }
     if (!is.null(shift_grid) || !is.null(shift_range)) {
       requested_grid <- resolve_silk_shift_grid(shift_grid, shift_range)
       if (!isTRUE(all.equal(requested_grid, registration$grid))) {
@@ -349,9 +375,8 @@ predict_silk <- function(fit, test_subjects, test_visits,
   pred_shift <- predict_registration_shift(fit$registration$final_template, test_visits, fit$grid)
   stage <- test_subjects$A_obs[match(pred_shift$id, test_subjects$id)] - pred_shift$e_hat
   stage <- stage[match(test_subjects$id, pred_shift$id)]
-  test_history <- make_history_features(test_subjects, test_visits)
-  x <- silk_history_covariates(test_subjects, test_history, stage)
-  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
+  x <- base_covariates(test_subjects)
+  risk <- predict_age_scale_cox_risk(fit$fit, stage, x, horizons)
   prediction_frame(
     test_subjects,
     landmark = stage,
@@ -367,9 +392,9 @@ predict_silk <- function(fit, test_subjects, test_visits,
 #' @rdname silk_survival_layers
 #' @export
 fit_oracle_latent_age <- function(train_subjects, train_visits) {
-  x <- landmark_covariates(train_subjects, train_visits, clock = "latent")
-  fit <- fit_residual_cox(train_subjects, x)
-  list(method = "Oracle-Latent-Age", fit = fit)
+  x <- base_covariates(train_subjects)
+  fit <- fit_age_scale_cox(train_subjects, train_subjects$A_star, x)
+  list(method = "Oracle-Latent-Age", fit = fit, survival_time_scale = "attained_age")
 }
 
 #' @rdname silk_survival_layers
@@ -387,8 +412,8 @@ predict_oracle_latent_age <- function(fit, test_subjects, test_visits,
                                       n_train_setting = NA,
                                       time_grid_setting = NA) {
   if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
-  x <- landmark_covariates(test_subjects, test_visits, clock = "latent")
-  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
+  x <- base_covariates(test_subjects)
+  risk <- predict_age_scale_cox_risk(fit$fit, test_subjects$A_star, x, horizons)
   prediction_frame(
     test_subjects,
     landmark = test_subjects$A_star,

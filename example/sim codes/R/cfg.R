@@ -72,6 +72,8 @@ CODECHECK_SCENARIOS <- c("mean_strong_dense", "dist_strong_dense", "mean_severe"
 # ----------------------------- DGM parameters --------------------------------
 SURV_LAMBDA_D <- 10.0
 SURV_KAPPA_D <- 1.35
+SURV_AGE_BASE_RATE <- as.numeric(Sys.getenv("SILK_SURV_AGE_RATE", unset = "0.04"))
+SURV_AGE_GROWTH <- as.numeric(Sys.getenv("SILK_SURV_AGE_GROWTH", unset = "0.18"))
 SURV_BETA_A <- 0.95
 SURV_BETA_X1 <- 0.20
 SURV_BETA_X2 <- 0.15
@@ -102,6 +104,14 @@ H_X_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HX", unset = "1.50"))
 H_X2_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HX2", unset = "1.00"))
 H_LAG_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HLAG", unset = "0.50"))
 BIOMARKER_BANDWIDTH <- Sys.getenv("SILK_BIOMARKER_BW", unset = "median")
+BIOMARKER_KERNELS <- unique(trimws(strsplit(
+  Sys.getenv("SILK_BIOMARKER_KERNELS", unset = "gaussian,laplace,matern32"), ","
+)[[1]]))
+BIOMARKER_KERNELS <- BIOMARKER_KERNELS[nzchar(BIOMARKER_KERNELS)]
+allowed_biomarker_kernels <- c("gaussian", "laplace", "matern32")
+if (!length(BIOMARKER_KERNELS) || length(setdiff(BIOMARKER_KERNELS, allowed_biomarker_kernels))) {
+  stop("SILK_BIOMARKER_KERNELS must be a comma-separated subset of gaussian,laplace,matern32.")
+}
 BIOMARKER_BANDWIDTH_MAX_POINTS <- as.integer(
   Sys.getenv("SILK_BIOMARKER_BW_MAX_POINTS", unset = "500")
 )
@@ -122,24 +132,36 @@ TEMPLATE_QUERY_CHUNK <- as.integer(
 )
 N_ALT_ITER_MAX <- as.integer(Sys.getenv("SILK_ALT_ITER", unset = "7"))
 ALT_TOL <- 1e-3
-N_STARTS <- as.integer(Sys.getenv("SILK_N_STARTS", unset = "4"))
+ALT_LOCAL_RADIUS <- as.numeric(Sys.getenv("SILK_ALT_LOCAL_RADIUS", unset = "2.0"))
+N_STARTS <- as.integer(Sys.getenv("SILK_N_STARTS", unset = "1"))
 RANDOM_START_SD <- 0.75
 N_FOLDS <- as.integer(Sys.getenv("SILK_N_FOLDS", unset = "5"))
 ANCHOR_MODE <- Sys.getenv("SILK_ANCHOR_MODE", unset = "rx") # "intercept" or "rx"
 PROFILE_TEMPERATURE <- as.numeric(Sys.getenv("SILK_PROFILE_TEMP", unset = "0.015"))
 PROFILE_LOCAL_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_LOCAL_RADIUS", unset = "0.8"))
+PROFILE_SEARCH_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_SEARCH_RADIUS", unset = "2.0"))
+CLOCK_SIGNAL_MIN <- as.numeric(Sys.getenv("SILK_CLOCK_SIGNAL_MIN", unset = "0.10"))
 
 # ----------------------------- Methods ---------------------------------------
 # Active methods for a clean characteristic-kernel rerun. Historical linear
 # biomarker-kernel variants are intentionally excluded: they do not implement
 # the distribution-identifying registration analyzed in the paper.
 #   Cox layer:   Cox-SameFeature-Recorded -> Recorded-Cox
-#                SILK                     -> SILK-Cox
+#                SILK kernel variants     -> SILK-Cox
 #                Oracle-Latent-Age        -> Oracle-Cox
 #   Beran layer: Beran-Recorded           -> Recorded-Beran
 #                Beran-SILK               -> SILK-Beran
 #                Beran-Oracle-Latent-Age  -> Oracle-Beran
-#   Block B:     Landmark/MMLM/JM/RSF/DeepSurv/Bayesian-Dynamic (observed time)
+#   Block B:     Landmark/MMLM/JM/RSF/DeepSurv (observed time)
+KERNEL_METHODS <- c(
+  gaussian = "SILK",
+  laplace = "SILK-Laplace",
+  matern32 = "SILK-Matern32"
+)
+ACTIVE_KERNEL_METHODS <- unname(KERNEL_METHODS[BIOMARKER_KERNELS])
+INCLUDE_HISTORY_ABLATION <- identical(
+  tolower(Sys.getenv("SILK_INCLUDE_HISTORY_ABLATION", unset = "false")), "true"
+)
 METHODS <- c(
   "Landmark-Recorded",
   "Cox-SameFeature-Recorded",
@@ -147,14 +169,16 @@ METHODS <- c(
   "JM-Recorded",
   "RSF-Observed",
   "DeepSurv-Observed",
-  "Bayesian-Dynamic-Observed",
   "TimeError-Integrated-Landmark",
-  "SILK",
+  ACTIVE_KERNEL_METHODS,
   "Beran-Recorded",
   "Beran-SILK",
   "Beran-Oracle-Latent-Age",
   "Oracle-Latent-Age"
 )
+if (INCLUDE_HISTORY_ABLATION) {
+  METHODS <- c(METHODS, "Cox-History-Recorded", "SILK-History")
+}
 METHOD_ORDER <- METHODS
 
 SURVIVAL_HISTORY_BIOMARKERS <- as.integer(Sys.getenv("SILK_SURV_HIST_B", unset = "3"))
@@ -162,32 +186,35 @@ SURVIVAL_HISTORY_KEEP <- c("X1", "X2")
 TIMEERROR_N_IMPUTE <- as.integer(Sys.getenv("SILK_TIMEERROR_N_IMPUTE", unset = "5"))
 TIMEERROR_SD <- as.numeric(Sys.getenv("SILK_TIMEERROR_SD", unset = "1.5"))
 TIMEERROR_USE_TRUTH <- identical(tolower(Sys.getenv("SILK_TIMEERROR_USE_TRUTH", unset = "false")), "true")
-ENABLE_JMBAYES2 <- identical(tolower(Sys.getenv("SILK_ENABLE_JMBAYES2", unset = "false")), "true")
+ENABLE_JMBAYES2 <- identical(tolower(Sys.getenv("SILK_ENABLE_JMBAYES2", unset = "true")), "true")
 JMBAYES_N_CHAINS <- as.integer(Sys.getenv("SILK_JMBAYES_N_CHAINS", unset = "1"))
 JMBAYES_N_ITER <- as.integer(Sys.getenv("SILK_JMBAYES_N_ITER", unset = "1000"))
 JMBAYES_N_BURNIN <- as.integer(Sys.getenv("SILK_JMBAYES_N_BURNIN", unset = "500"))
 JMBAYES_PRED_N_SAMPLES <- as.integer(Sys.getenv("SILK_JMBAYES_PRED_N_SAMPLES", unset = "200"))
-OBSERVED_ML_USE_CURRENT_BIOMARKER <- identical(tolower(Sys.getenv("SILK_OBSERVED_ML_USE_CURRENT_BIOMARKER", unset = "false")), "true")
+OBSERVED_ML_USE_CURRENT_BIOMARKER <- identical(tolower(Sys.getenv("SILK_OBSERVED_ML_USE_CURRENT_BIOMARKER", unset = "true")), "true")
 RSF_NUM_TREES <- as.integer(Sys.getenv("SILK_RSF_NUM_TREES", unset = "300"))
 RSF_MIN_NODE_SIZE <- as.integer(Sys.getenv("SILK_RSF_MIN_NODE_SIZE", unset = "15"))
-BAYES_SURV_CHAINS <- as.integer(Sys.getenv("SILK_BAYES_SURV_CHAINS", unset = "1"))
-BAYES_SURV_ITER <- as.integer(Sys.getenv("SILK_BAYES_SURV_ITER", unset = "1000"))
-BAYES_SURV_BASEHAZ <- Sys.getenv("SILK_BAYES_SURV_BASEHAZ", unset = "ms")
-BAYES_DYNAMIC_ENABLE_STATIC_FALLBACK <- identical(tolower(Sys.getenv("SILK_BAYES_DYNAMIC_STATIC_FALLBACK", unset = "false")), "true")
 DEEPSURV_EPOCHS <- as.integer(Sys.getenv("SILK_DEEPSURV_EPOCHS", unset = "80"))
 DEEPSURV_BATCH_SIZE <- as.integer(Sys.getenv("SILK_DEEPSURV_BATCH_SIZE", unset = "128"))
+DEEPSURV_VALIDATION_FRACTION <- as.numeric(
+  Sys.getenv("SILK_DEEPSURV_VALIDATION_FRACTION", unset = "0.20")
+)
+DEEPSURV_PATIENCE <- as.integer(Sys.getenv("SILK_DEEPSURV_PATIENCE", unset = "10"))
 
 # ----------------------------- Scenarios -------------------------------------
+# Error scales are fixed through age reliability, not selected by prediction
+# performance. With Var(A*) = 64/12, sigma 2.5 and 5 correspond to approximate
+# reliabilities 0.46 and 0.18, respectively.
 SCENARIOS <- data.frame(
   scenario = SCENARIOS_ALL,
   biomarker_signal = c(
     "mean", "mean", "mean", "mean_strong", "distribution", "distribution",
-    "distribution_strong", "weak", "mean", "mean", "mean", "mean"
+    "distribution_strong", "stage_null", "mean", "mean", "mean", "mean"
   ),
   default_schedule = c(
     "m4", "m4", "m4", "m12", "m4", "m4", "m12", "m4", "m4", "m4", "m4", "m4"
   ),
-  sigma_eps = c(0, 3.0, 10.0, 10.0, 3.0, 10.0, 10.0, 10.0, 6.0, 10.0, 10.0, 10.0),
+  sigma_eps = c(0, 2.5, 5.0, 5.0, 2.5, 5.0, 5.0, 5.0, 4.0, 5.0, 5.0, 5.0),
   eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 2.5, 0, 0, 0),
   eps_type = c(
     "normal", "normal", "mixture", "mixture", "normal", "mixture",
@@ -196,15 +223,15 @@ SCENARIOS <- data.frame(
   n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
   missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
   irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
-  shift_min = c(-4, -12, -30, -30, -12, -30, -30, -30, -24, -35, -35, -30),
-  shift_max = c( 4,  12,  30,  30,  12,  30,  30,  30,  30,  35,  35,  30),
-  signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.08, 2.00, 2.00, 2.00, 2.00),
+  shift_min = c(-4, -8, -15, -15, -8, -15, -15, -15, -12, -20, -20, -15),
+  shift_max = c( 4,  8,  15,  15,  8,  15,  15,  15,  16,  20,  20,  15),
+  signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.00, 2.00, 2.00, 2.00, 2.00),
   sigma_bio = c(0.70, 0.60, 0.50, 0.22, 0.70, 0.60, 0.30, 1.45, 0.55, 0.55, 0.55, 0.65),
-  u_bio_coef = c(0.15, 0.12, 0.08, 0.02, 0.12, 0.08, 0.02, 0.20, 0.10, 0.10, 0.10, 0.10),
+  u_bio_coef = rep(0, 12),
   dist_sd_base = c(0.45, 0.45, 0.45, 0.45, 0.36, 0.22, 0.14, 0.45, 0.45, 0.45, 0.45, 0.45),
   dist_sd_slope = c(0.18, 0.18, 0.18, 0.18, 0.35, 0.85, 1.25, 0.18, 0.18, 0.18, 0.18, 0.18),
-  risk_beta_A = c(0.95, 1.05, 1.65, 2.10, 1.05, 1.65, 2.10, 1.10, 1.20, 1.20, 1.20, 1.20),
-  risk_beta_U = c(0.15, 0.12, 0.08, 0.03, 0.12, 0.08, 0.03, 0.18, 0.10, 0.10, 0.10, 0.10),
+  risk_age_growth = rep(SURV_AGE_GROWTH, 12),
+  risk_beta_U = rep(0, 12),
   description = c(
     "No origin error; calibration should not help and may add noise.",
     "Mean-stage biomarkers; moderate common origin error.",
@@ -213,7 +240,7 @@ SCENARIOS <- data.frame(
     "Distributional biomarkers; moderate common origin error.",
     "Distributional biomarkers; severe common origin error.",
     "Favorable distributional sanity regime: severe error, strong dispersion signal, dense visits.",
-    "Weak-stage negative-control regime.",
+    "Prespecified stage-null negative control: biomarkers contain no latent-age or frailty signal.",
     "Biased-shift sensitivity regime; mean-zero anchor is misspecified.",
     "Heavy-tailed common-shift regime.",
     "Asymmetric common-shift regime.",
@@ -245,9 +272,12 @@ METHOD_LABELS <- c(
   "JM-Recorded" = "JM-Recorded",
   "RSF-Observed" = "RSF-Observed",
   "DeepSurv-Observed" = "DeepSurv-Observed",
-  "Bayesian-Dynamic-Observed" = "Bayesian-Dynamic-Observed",
   "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
-  "SILK" = "SILK-Cox",
+  "SILK" = "SILK-Cox (Gaussian)",
+  "SILK-Laplace" = "SILK-Cox (Laplace)",
+  "SILK-Matern32" = "SILK-Cox (Matern-3/2)",
+  "Cox-History-Recorded" = "Recorded-Cox + history (suppl.)",
+  "SILK-History" = "SILK-Cox + history (suppl.)",
   "Beran-Recorded" = "Recorded-Beran",
   "Beran-SILK" = "SILK-Beran",
   "Beran-Oracle-Latent-Age" = "Oracle-Beran",
@@ -307,6 +337,8 @@ silk_options(
   TIMEPOINT_SCHEDULES = TIMEPOINT_SCHEDULES,
   SURV_LAMBDA_D = SURV_LAMBDA_D,
   SURV_KAPPA_D = SURV_KAPPA_D,
+  SURV_AGE_BASE_RATE = SURV_AGE_BASE_RATE,
+  SURV_AGE_GROWTH = SURV_AGE_GROWTH,
   SURV_BETA_A = SURV_BETA_A,
   SURV_BETA_X1 = SURV_BETA_X1,
   SURV_BETA_X2 = SURV_BETA_X2,
@@ -326,6 +358,7 @@ silk_options(
   SHIFT_GRID_STEP = SHIFT_GRID_STEP,
   DEFAULT_SHIFT_GRID_MIN = DEFAULT_SHIFT_GRID_MIN,
   DEFAULT_SHIFT_GRID_MAX = DEFAULT_SHIFT_GRID_MAX,
+  BIOMARKER_KERNEL = "gaussian",
   BIOMARKER_BANDWIDTH = BIOMARKER_BANDWIDTH,
   BIOMARKER_BANDWIDTH_MAX_POINTS = BIOMARKER_BANDWIDTH_MAX_POINTS,
   TEMPLATE_INPUT_FEATURES = TEMPLATE_INPUT_FEATURES,
@@ -340,12 +373,15 @@ silk_options(
   H_LAG_BANDWIDTH = H_LAG_BANDWIDTH,
   N_ALT_ITER_MAX = N_ALT_ITER_MAX,
   ALT_TOL = ALT_TOL,
+  ALT_LOCAL_RADIUS = ALT_LOCAL_RADIUS,
   N_STARTS = N_STARTS,
   RANDOM_START_SD = RANDOM_START_SD,
   N_FOLDS = N_FOLDS,
   ANCHOR_MODE = ANCHOR_MODE,
   PROFILE_TEMPERATURE = PROFILE_TEMPERATURE,
   PROFILE_LOCAL_RADIUS = PROFILE_LOCAL_RADIUS,
+  PROFILE_SEARCH_RADIUS = PROFILE_SEARCH_RADIUS,
+  CLOCK_SIGNAL_MIN = CLOCK_SIGNAL_MIN,
   N_CORES = registration_cores,
   METHODS = METHODS,
   METHOD_ORDER = METHOD_ORDER,

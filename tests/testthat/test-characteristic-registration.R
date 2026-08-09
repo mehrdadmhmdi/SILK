@@ -8,41 +8,65 @@ local_silk_options <- function(...) {
   do.call(silk_options, values)
 }
 
-test_that("Gaussian biomarker kernel is normalized and positive semidefinite", {
+supported_kernels <- c(
+  gaussian = "gaussian_rbf",
+  laplace = "laplace_l2",
+  matern32 = "matern_3_2"
+)
+
+test_that("supported biomarker kernels are normalized and positive semidefinite", {
   x <- cbind(a = c(-2, -0.5, 1, 3), b = c(1, -1, 0.5, 2))
-  kernel <- SILK:::gaussian_rbf_kernel(x, bandwidth = 1.3)
-  expect_equal(kernel, t(kernel), tolerance = 1e-12)
-  expect_equal(diag(kernel), rep(1, nrow(x)), tolerance = 1e-12)
-  expect_gte(min(eigen(kernel, symmetric = TRUE, only.values = TRUE)$values), -1e-10)
+  for (kernel_name in names(supported_kernels)) {
+    builder <- list(kernel = kernel_name, bandwidth = 1.3)
+    kernel <- SILK:::evaluate_biomarker_kernel(x, builder = builder)
+    expect_equal(kernel, t(kernel), tolerance = 1e-12, info = kernel_name)
+    expect_equal(diag(kernel), rep(1, nrow(x)), tolerance = 1e-12, info = kernel_name)
+    expect_gte(
+      min(eigen(kernel, symmetric = TRUE, only.values = TRUE)$values),
+      -1e-10
+    )
+  }
 })
 
-test_that("Gaussian MMD distinguishes distributions with matching first two moments", {
+test_that("supported characteristic kernels distinguish moment-matched distributions", {
   p <- matrix(c(-1, -1, 1, 1), ncol = 1)
   q <- matrix(c(-sqrt(2), 0, 0, sqrt(2)), ncol = 1)
   expect_equal(mean(p), mean(q), tolerance = 1e-12)
   expect_equal(stats::var(p), stats::var(q), tolerance = 1e-12)
-  mmd_squared <- mean(SILK:::gaussian_rbf_kernel(p, bandwidth = 0.8)) +
-    mean(SILK:::gaussian_rbf_kernel(q, bandwidth = 0.8)) -
-    2 * mean(SILK:::gaussian_rbf_kernel(p, q, bandwidth = 0.8))
-  expect_gt(mmd_squared, 1e-3)
+  for (kernel_name in names(supported_kernels)) {
+    builder <- list(kernel = kernel_name, bandwidth = 0.8)
+    mmd_squared <- mean(SILK:::evaluate_biomarker_kernel(p, builder = builder)) +
+      mean(SILK:::evaluate_biomarker_kernel(q, builder = builder)) -
+      2 * mean(SILK:::evaluate_biomarker_kernel(p, q, builder = builder))
+    expect_gt(mmd_squared, 1e-3)
+  }
 })
 
 test_that("implemented RKHS loss equals its direct kernel expansion", {
   biomarkers <- matrix(c(-1.2, 0.1, 1.4), ncol = 1)
   query <- matrix(0.35, ncol = 1)
-  kernel <- SILK:::gaussian_rbf_kernel(biomarkers, bandwidth = 1.1)
-  cross_kernel <- SILK:::gaussian_rbf_kernel(biomarkers, query, bandwidth = 1.1)
   A <- matrix(c(0.2, -0.1, 0.3, 0.4, 0.1, -0.2), nrow = 3, ncol = 2)
   psi <- c(0.7, -0.25)
   beta <- as.numeric(A %*% psi)
-  direct <- 1 - 2 * sum(beta * cross_kernel) +
-    as.numeric(crossprod(beta, kernel %*% beta))
-  summary_loss <- SILK:::rkhs_loss_from_summaries(
-    matrix(psi, nrow = 1),
-    t(crossprod(A, cross_kernel)),
-    crossprod(A, kernel %*% A)
-  )
-  expect_equal(as.numeric(summary_loss), direct, tolerance = 1e-12)
+  for (kernel_name in names(supported_kernels)) {
+    builder <- list(kernel = kernel_name, bandwidth = 1.1)
+    kernel <- SILK:::evaluate_biomarker_kernel(biomarkers, builder = builder)
+    cross_kernel <- SILK:::evaluate_biomarker_kernel(biomarkers, query, builder = builder)
+    direct <- 1 - 2 * sum(beta * cross_kernel) +
+      as.numeric(crossprod(beta, kernel %*% beta))
+    summary_loss <- SILK:::rkhs_loss_from_summaries(
+      matrix(psi, nrow = 1),
+      t(crossprod(A, cross_kernel)),
+      crossprod(A, kernel %*% A)
+    )
+    expect_equal(as.numeric(summary_loss), direct, tolerance = 1e-12, info = kernel_name)
+  }
+})
+
+test_that("noncharacteristic or unknown biomarker kernels are rejected", {
+  expect_error(SILK:::normalize_biomarker_kernel("linear"), "not generally characteristic")
+  expect_error(SILK:::normalize_biomarker_kernel("polynomial"), "not generally characteristic")
+  expect_error(SILK:::normalize_biomarker_kernel("unknown"), "Unsupported biomarker kernel")
 })
 
 test_that("primal template coefficients equal the dual ridge solution", {
@@ -82,7 +106,19 @@ test_that("missing visits retain nominal schedule positions", {
   expect_true(all(vapply(by_subject, max, numeric(1)) == 4))
 })
 
-test_that("Cox and Beran layers reuse one characteristic registration", {
+test_that("the primary DGM uses an attained-age hazard and a stage-null control", {
+  younger <- SILK:::true_survival_curve(4, start_age = 24, eta_risk = 0, growth = 0.18)
+  older <- SILK:::true_survival_curve(4, start_age = 32, eta_risk = 0, growth = 0.18)
+  expect_lt(older, younger)
+
+  control <- get_scenario("weak_stage")
+  expect_identical(control$biomarker_signal, "stage_null")
+  expect_equal(control$signal_amp, 0)
+  expect_equal(control$u_bio_coef, 0)
+  expect_equal(control$risk_beta_U, 0)
+})
+
+test_that("Cox and Beran layers reuse each exact characteristic registration", {
   local_silk_options(
     N_FOLDS = 2L,
     N_STARTS = 1L,
@@ -94,18 +130,21 @@ test_that("Cox and Beran layers reuse one characteristic registration", {
   )
   train <- generate_dataset_fixed(30, "no_error", schedule_name = "m2", seed = 31)
   test <- generate_dataset_fixed(12, "no_error", schedule_name = "m2", seed = 32)
-  registration <- fit_silk_registration(
-    train$subjects, train$visits, shift_grid = c(-1, 0, 1), seed = 33
-  )
-  expect_s3_class(registration, "silk_registration")
-  expect_true(registration$characteristic)
-  expect_identical(registration$biomarker_kernel, "gaussian_rbf")
+  for (kernel_name in names(supported_kernels)) {
+    registration <- fit_silk_registration(
+      train$subjects, train$visits, shift_grid = c(-1, 0, 1), seed = 33,
+      biomarker_kernel = kernel_name
+    )
+    expect_s3_class(registration, "silk_registration")
+    expect_true(registration$characteristic)
+    expect_identical(registration$biomarker_kernel, supported_kernels[[kernel_name]])
 
-  cox <- fit_silk(train$subjects, train$visits, registration = registration)
-  beran <- fit_beran_silk(train$subjects, train$visits, registration = registration)
-  expect_identical(cox$registration, registration)
-  expect_identical(beran$registration, registration)
-  expect_s3_class(predict_silk_registration(registration, test$visits), "data.frame")
-  expect_s3_class(predict_silk(cox, test$subjects, test$visits), "data.frame")
-  expect_s3_class(predict_beran_silk(beran, test$subjects, test$visits), "data.frame")
+    cox <- fit_silk(train$subjects, train$visits, registration = registration)
+    beran <- fit_beran_silk(train$subjects, train$visits, registration = registration)
+    expect_identical(cox$registration, registration)
+    expect_identical(beran$registration, registration)
+    expect_s3_class(predict_silk_registration(registration, test$visits), "data.frame")
+    expect_s3_class(predict_silk(cox, test$subjects, test$visits), "data.frame")
+    expect_s3_class(predict_beran_silk(beran, test$subjects, test$visits), "data.frame")
+  }
 })
