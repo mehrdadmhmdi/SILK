@@ -72,18 +72,24 @@ silk_default_options <- function() {
     SHIFT_GRID_STEP = 0.2,
     DEFAULT_SHIFT_GRID_MIN = -8,
     DEFAULT_SHIFT_GRID_MAX = 8,
+    # The biomarker kernel is deliberately not configurable: SILK always uses
+    # an exact Gaussian RBF kernel, which is characteristic on Euclidean
+    # biomarker space. The bandwidth may be data-adaptive or fixed.
+    BIOMARKER_BANDWIDTH = "median",
+    BIOMARKER_BANDWIDTH_MAX_POINTS = 500L,
+
+    # A fixed Fourier map defines the scalar template-input kernel only. It is
+    # not an approximation to the biomarker kernel or its RKHS loss.
+    TEMPLATE_INPUT_FEATURES = 16L,
+    TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "lag"),
+    TEMPLATE_FEATURE_SEED = 271828L,
+    TEMPLATE_RIDGE_LAMBDA = 0.001,
+    TEMPLATE_NUMERICAL_JITTER = 1e-10,
+    TEMPLATE_QUERY_CHUNK = 5000L,
     H_A_BANDWIDTH = 1.00,
     H_X_BANDWIDTH = 1.50,
-    REGISTRATION_KERNEL = "rbf",
-    REGISTRATION_KERNEL_APPROX = "exact",
-    KERNEL_RFF_DIM = 512L,
-    KERNEL_RFF_SEED = 20260530L,
-    KERNEL_MATERN_NU = 1.5,
-    KERNEL_POLYNOMIAL_DEGREE = 2L,
-    KERNEL_POLYNOMIAL_COEF0 = 1.0,
-    KERNEL_POLYNOMIAL_SCALE = 0.5,
-    KERNEL_POLYNOMIAL_NONNEGATIVE = TRUE,
-    KERNEL_CHUNK_SIZE = 2500L,
+    H_X2_BANDWIDTH = 1.00,
+    H_LAG_BANDWIDTH = 0.50,
     N_ALT_ITER_MAX = 7L,
     ALT_TOL = 1e-3,
     N_STARTS = 4L,
@@ -113,16 +119,16 @@ silk_default_options <- function() {
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
       "MMLM-Recorded", "JM-Recorded",
       "RSF-Observed", "DeepSurv-Observed", "Bayesian-Dynamic-Observed",
-      "TimeError-Integrated-Landmark", "SILK", "SILK-LinearMMD",
-      "Beran-Recorded", "Beran-SILK", "Beran-SILK-Linear",
+      "TimeError-Integrated-Landmark", "SILK",
+      "Beran-Recorded", "Beran-SILK",
       "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
     ),
     METHOD_ORDER = c(
       "Landmark-Recorded", "Cox-SameFeature-Recorded",
       "MMLM-Recorded", "JM-Recorded",
       "RSF-Observed", "DeepSurv-Observed", "Bayesian-Dynamic-Observed",
-      "TimeError-Integrated-Landmark", "SILK", "SILK-LinearMMD",
-      "Beran-Recorded", "Beran-SILK", "Beran-SILK-Linear",
+      "TimeError-Integrated-Landmark", "SILK",
+      "Beran-Recorded", "Beran-SILK",
       "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
     ),
 
@@ -205,11 +211,9 @@ silk_default_options <- function() {
       "DeepSurv-Observed" = "DeepSurv-Observed",
       "Bayesian-Dynamic-Observed" = "Bayesian-Dynamic-Observed",
       "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
-      SILK = "SILK-Gaussian-Cox",
-      "SILK-LinearMMD" = "SILK-Linear-Cox",
+      SILK = "SILK-Cox",
       "Beran-Recorded" = "Recorded-Beran",
-      "Beran-SILK" = "SILK-Gaussian-Beran",
-      "Beran-SILK-Linear" = "SILK-Linear-Beran",
+      "Beran-SILK" = "SILK-Beran",
       "Beran-Oracle-Latent-Age" = "Oracle-Beran",
       "Oracle-Latent-Age" = "Oracle-Cox",
       "SILK-MeanReg" = "SILK-MeanTraj (suppl.)"
@@ -334,7 +338,10 @@ silk_resolve_cores <- function() {
 #' Sets one or more SILK package options.
 #'
 #' @param ... Named arguments where names are option names and values are the
-#'   new option values.
+#'   new option values. Registration uses a fixed exact Gaussian RBF biomarker
+#'   kernel. Its bandwidth is controlled by \code{BIOMARKER_BANDWIDTH};
+#'   \code{TEMPLATE_INPUT_FEATURES} and the \code{H_*_BANDWIDTH} options control
+#'   only the scalar template-input kernel.
 #' @return Invisible NULL.
 #' @export
 #' @examples

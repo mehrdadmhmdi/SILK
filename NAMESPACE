@@ -3,8 +3,18 @@
 # Core SILK
 export(fit_silk)
 export(predict_silk)
+export(fit_silk_registration)
+export(predict_silk_registration)
 export(fit_same_feature_recorded_cox)
 export(predict_same_feature_recorded_cox)
+export(fit_beran_recorded)
+export(predict_beran_recorded)
+export(fit_beran_silk)
+export(predict_beran_silk)
+export(fit_oracle_latent_age)
+export(predict_oracle_latent_age)
+export(fit_beran_oracle_latent_age)
+export(predict_beran_oracle_latent_age)
 
 # Data generation
 export(generate_dataset_fixed)
@@ -34,6 +44,8 @@ export(predict_beran_risk)
 
 # Evaluation
 export(evaluate_prediction_frame)
+export(validate_prediction_frame)
+export(summarize_calibration_bins)
 export(prediction_per_horizon_metrics)
 export(prediction_replicate_metrics)
 export(prediction_method_summary)

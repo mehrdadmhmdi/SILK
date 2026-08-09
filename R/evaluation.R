@@ -10,7 +10,11 @@ PREDICTION_COLUMNS <- c(
   "n_train_setting", "time_grid_setting"
 )
 
-#' @keywords internal
+#' Validate a SILK prediction frame
+#'
+#' @param pred Data frame of subject-by-horizon predictions.
+#' @return The validated prediction frame in canonical column order.
+#' @export
 validate_prediction_frame <- function(pred) {
   missing <- setdiff(PREDICTION_COLUMNS, names(pred))
   if (length(missing)) {
@@ -196,7 +200,12 @@ prediction_calibration_bins <- function(pred, n_bins = 10L) {
   out
 }
 
-#' @keywords internal
+#' Summarize calibration bins across simulation replications
+#'
+#' @param calibration_bins Data frame returned in the calibration component of
+#'   \code{evaluate_prediction_frame}.
+#' @return A data frame of weighted calibration-bin summaries.
+#' @export
 summarize_calibration_bins <- function(calibration_bins) {
   if (is.null(calibration_bins) || !nrow(calibration_bins)) return(data.frame())
   key <- interaction(

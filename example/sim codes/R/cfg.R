@@ -1,0 +1,419 @@
+# =============================================================================
+# cfg.R
+# Multifaceted SILK simulation configuration, v4.
+#
+# Simulation target:
+#   The primary target is absolute risk over fixed prediction horizons:
+#   P(T <= a + horizon | T > a, information available by landmark a).
+#   Recorded-age methods use recorded time; SILK uses its calibrated landmark
+#   score; the latent-age oracle is simulation-only.
+# =============================================================================
+
+# ----------------------------- Paths -----------------------------------------
+SIM_ROOT <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+R_DIR <- file.path(SIM_ROOT, "R")
+OUT_DIR_ENV <- Sys.getenv("SILK_OUT_DIR", unset = "")
+OUT_DIR <- if (nzchar(OUT_DIR_ENV)) {
+  normalizePath(OUT_DIR_ENV, winslash = "/", mustWork = FALSE)
+} else {
+  file.path(SIM_ROOT, "outputs")
+}
+RAW_DIR <- file.path(OUT_DIR, "raw")
+SUMMARY_DIR <- file.path(OUT_DIR, "summary")
+FIG_DIR <- file.path(OUT_DIR, "figures")
+LOG_DIR <- file.path(OUT_DIR, "logs")
+for (d in c(RAW_DIR, SUMMARY_DIR, FIG_DIR, LOG_DIR)) {
+  if (!dir.exists(d)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+}
+
+# ----------------------------- General design --------------------------------
+GLOBAL_SEED <- 20260530L
+LATENT_AGE_MIN <- 24
+LATENT_AGE_MAX <- 32
+A_STAR_CENTER <- 28
+A_STAR_SD <- (LATENT_AGE_MAX - LATENT_AGE_MIN) / sqrt(12)
+
+# Visit times are stored as time before landmark. All schedules end at lag 0.
+VISIT_SCHEDULES <- list(
+  m2  = c(6, 0),
+  m3  = c(6, 3, 0),
+  m4  = c(6, 4, 2, 0),
+  m8  = seq(6, 0, length.out = 8),
+  m12 = seq(6, 0, length.out = 12),
+  m20 = seq(6, 0, length.out = 20)
+)
+
+PRIMARY_SCHEDULE <- "m4"
+TIMEPOINT_SCENARIOS <- SCENARIOS_ALL <- c(
+  "no_error",
+  "mean_moderate",
+  "mean_severe",
+  "mean_strong_dense",
+  "dist_moderate",
+  "dist_large",
+  "dist_strong_dense",
+  "weak_stage",
+  "biased_shift",
+  "heavy_tail",
+  "asymmetric_shift",
+  "irregular_missing"
+)
+TIMEPOINT_SCHEDULES <- c("m2", "m4", "m8", "m12", "m20")
+TIMEPOINT_N_TRAIN <- as.integer(Sys.getenv("SILK_TP_N_TRAIN", unset = "400"))
+
+N_TRAIN_GRID <- as.integer(strsplit(Sys.getenv("SILK_N_TRAIN_GRID", unset = "200,400,1000"), ",")[[1]])
+N_TEST <- as.integer(Sys.getenv("SILK_N_TEST", unset = "1000"))
+N_REP <- as.integer(Sys.getenv("SILK_N_REP", unset = "50"))
+CODECHECK_N_TRAIN <- as.integer(Sys.getenv("SILK_CODECHECK_N_TRAIN", unset = "300"))
+CODECHECK_N_TEST <- as.integer(Sys.getenv("SILK_CODECHECK_N_TEST", unset = "1000"))
+CODECHECK_N_REP <- as.integer(Sys.getenv("SILK_CODECHECK_N_REP", unset = "2"))
+CODECHECK_SCENARIOS <- c("mean_strong_dense", "dist_strong_dense", "mean_severe")
+
+# ----------------------------- DGM parameters --------------------------------
+SURV_LAMBDA_D <- 10.0
+SURV_KAPPA_D <- 1.35
+SURV_BETA_A <- 0.95
+SURV_BETA_X1 <- 0.20
+SURV_BETA_X2 <- 0.15
+SURV_BETA_U <- 0.25
+CENS_RATE <- 0.045
+EVAL_HORIZON <- 4.0
+PREDICTION_HORIZONS <- as.numeric(strsplit(Sys.getenv("SILK_HORIZONS", unset = "1,2,3,4"), ",")[[1]])
+PREDICTION_HORIZONS <- sort(unique(PREDICTION_HORIZONS[is.finite(PREDICTION_HORIZONS) & PREDICTION_HORIZONS > 0]))
+if (!length(PREDICTION_HORIZONS)) PREDICTION_HORIZONS <- EVAL_HORIZON
+
+# Default biomarker controls; scenario-specific columns override these.
+N_BIO_MEAN <- 4L
+N_BIO_DIST <- 20L
+N_BIO_WEAK <- 6L
+SIGMA_BIO_MEAN <- 0.70
+SIGMA_BIO_WEAK <- 1.25
+DIST_SD_BASE <- 0.45
+DIST_SD_SLOPE <- 0.18
+DEFAULT_SIGNAL_AMP <- 1.35
+DEFAULT_U_BIO_COEF <- 0.15
+
+# ----------------------------- Registration ----------------------------------
+SHIFT_GRID_STEP <- as.numeric(Sys.getenv("SILK_SHIFT_GRID_STEP", unset = "0.2"))
+DEFAULT_SHIFT_GRID_MIN <- -8
+DEFAULT_SHIFT_GRID_MAX <- 8
+H_A_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HA", unset = "1.00"))
+H_X_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HX", unset = "1.50"))
+H_X2_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HX2", unset = "1.00"))
+H_LAG_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HLAG", unset = "0.50"))
+BIOMARKER_BANDWIDTH <- Sys.getenv("SILK_BIOMARKER_BW", unset = "median")
+BIOMARKER_BANDWIDTH_MAX_POINTS <- as.integer(
+  Sys.getenv("SILK_BIOMARKER_BW_MAX_POINTS", unset = "500")
+)
+TEMPLATE_INPUT_FEATURES <- as.integer(
+  Sys.getenv("SILK_TEMPLATE_INPUT_FEATURES", unset = "16")
+)
+TEMPLATE_FEATURE_SEED <- as.integer(
+  Sys.getenv("SILK_TEMPLATE_FEATURE_SEED", unset = "271828")
+)
+TEMPLATE_RIDGE_LAMBDA <- as.numeric(
+  Sys.getenv("SILK_TEMPLATE_RIDGE", unset = "0.001")
+)
+TEMPLATE_NUMERICAL_JITTER <- as.numeric(
+  Sys.getenv("SILK_TEMPLATE_JITTER", unset = "1e-10")
+)
+TEMPLATE_QUERY_CHUNK <- as.integer(
+  Sys.getenv("SILK_TEMPLATE_QUERY_CHUNK", unset = "5000")
+)
+N_ALT_ITER_MAX <- as.integer(Sys.getenv("SILK_ALT_ITER", unset = "7"))
+ALT_TOL <- 1e-3
+N_STARTS <- as.integer(Sys.getenv("SILK_N_STARTS", unset = "4"))
+RANDOM_START_SD <- 0.75
+N_FOLDS <- as.integer(Sys.getenv("SILK_N_FOLDS", unset = "5"))
+ANCHOR_MODE <- Sys.getenv("SILK_ANCHOR_MODE", unset = "rx") # "intercept" or "rx"
+PROFILE_TEMPERATURE <- as.numeric(Sys.getenv("SILK_PROFILE_TEMP", unset = "0.015"))
+PROFILE_LOCAL_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_LOCAL_RADIUS", unset = "0.8"))
+
+# ----------------------------- Methods ---------------------------------------
+# Active methods for a clean characteristic-kernel rerun. Historical linear
+# biomarker-kernel variants are intentionally excluded: they do not implement
+# the distribution-identifying registration analyzed in the paper.
+#   Cox layer:   Cox-SameFeature-Recorded -> Recorded-Cox
+#                SILK                     -> SILK-Cox
+#                Oracle-Latent-Age        -> Oracle-Cox
+#   Beran layer: Beran-Recorded           -> Recorded-Beran
+#                Beran-SILK               -> SILK-Beran
+#                Beran-Oracle-Latent-Age  -> Oracle-Beran
+#   Block B:     Landmark/MMLM/JM/RSF/DeepSurv/Bayesian-Dynamic (observed time)
+METHODS <- c(
+  "Landmark-Recorded",
+  "Cox-SameFeature-Recorded",
+  "MMLM-Recorded",
+  "JM-Recorded",
+  "RSF-Observed",
+  "DeepSurv-Observed",
+  "Bayesian-Dynamic-Observed",
+  "TimeError-Integrated-Landmark",
+  "SILK",
+  "Beran-Recorded",
+  "Beran-SILK",
+  "Beran-Oracle-Latent-Age",
+  "Oracle-Latent-Age"
+)
+METHOD_ORDER <- METHODS
+
+SURVIVAL_HISTORY_BIOMARKERS <- as.integer(Sys.getenv("SILK_SURV_HIST_B", unset = "3"))
+SURVIVAL_HISTORY_KEEP <- c("X1", "X2")
+TIMEERROR_N_IMPUTE <- as.integer(Sys.getenv("SILK_TIMEERROR_N_IMPUTE", unset = "5"))
+TIMEERROR_SD <- as.numeric(Sys.getenv("SILK_TIMEERROR_SD", unset = "1.5"))
+TIMEERROR_USE_TRUTH <- identical(tolower(Sys.getenv("SILK_TIMEERROR_USE_TRUTH", unset = "false")), "true")
+ENABLE_JMBAYES2 <- identical(tolower(Sys.getenv("SILK_ENABLE_JMBAYES2", unset = "false")), "true")
+JMBAYES_N_CHAINS <- as.integer(Sys.getenv("SILK_JMBAYES_N_CHAINS", unset = "1"))
+JMBAYES_N_ITER <- as.integer(Sys.getenv("SILK_JMBAYES_N_ITER", unset = "1000"))
+JMBAYES_N_BURNIN <- as.integer(Sys.getenv("SILK_JMBAYES_N_BURNIN", unset = "500"))
+JMBAYES_PRED_N_SAMPLES <- as.integer(Sys.getenv("SILK_JMBAYES_PRED_N_SAMPLES", unset = "200"))
+OBSERVED_ML_USE_CURRENT_BIOMARKER <- identical(tolower(Sys.getenv("SILK_OBSERVED_ML_USE_CURRENT_BIOMARKER", unset = "false")), "true")
+RSF_NUM_TREES <- as.integer(Sys.getenv("SILK_RSF_NUM_TREES", unset = "300"))
+RSF_MIN_NODE_SIZE <- as.integer(Sys.getenv("SILK_RSF_MIN_NODE_SIZE", unset = "15"))
+BAYES_SURV_CHAINS <- as.integer(Sys.getenv("SILK_BAYES_SURV_CHAINS", unset = "1"))
+BAYES_SURV_ITER <- as.integer(Sys.getenv("SILK_BAYES_SURV_ITER", unset = "1000"))
+BAYES_SURV_BASEHAZ <- Sys.getenv("SILK_BAYES_SURV_BASEHAZ", unset = "ms")
+BAYES_DYNAMIC_ENABLE_STATIC_FALLBACK <- identical(tolower(Sys.getenv("SILK_BAYES_DYNAMIC_STATIC_FALLBACK", unset = "false")), "true")
+DEEPSURV_EPOCHS <- as.integer(Sys.getenv("SILK_DEEPSURV_EPOCHS", unset = "80"))
+DEEPSURV_BATCH_SIZE <- as.integer(Sys.getenv("SILK_DEEPSURV_BATCH_SIZE", unset = "128"))
+
+# ----------------------------- Scenarios -------------------------------------
+SCENARIOS <- data.frame(
+  scenario = SCENARIOS_ALL,
+  biomarker_signal = c(
+    "mean", "mean", "mean", "mean_strong", "distribution", "distribution",
+    "distribution_strong", "weak", "mean", "mean", "mean", "mean"
+  ),
+  default_schedule = c(
+    "m4", "m4", "m4", "m12", "m4", "m4", "m12", "m4", "m4", "m4", "m4", "m4"
+  ),
+  sigma_eps = c(0, 3.0, 10.0, 10.0, 3.0, 10.0, 10.0, 10.0, 6.0, 10.0, 10.0, 10.0),
+  eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 2.5, 0, 0, 0),
+  eps_type = c(
+    "normal", "normal", "mixture", "mixture", "normal", "mixture",
+    "mixture", "mixture", "normal", "t3", "asymmetric", "mixture"
+  ),
+  n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
+  missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
+  irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
+  shift_min = c(-4, -12, -30, -30, -12, -30, -30, -30, -24, -35, -35, -30),
+  shift_max = c( 4,  12,  30,  30,  12,  30,  30,  30,  30,  35,  35,  30),
+  signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.08, 2.00, 2.00, 2.00, 2.00),
+  sigma_bio = c(0.70, 0.60, 0.50, 0.22, 0.70, 0.60, 0.30, 1.45, 0.55, 0.55, 0.55, 0.65),
+  u_bio_coef = c(0.15, 0.12, 0.08, 0.02, 0.12, 0.08, 0.02, 0.20, 0.10, 0.10, 0.10, 0.10),
+  dist_sd_base = c(0.45, 0.45, 0.45, 0.45, 0.36, 0.22, 0.14, 0.45, 0.45, 0.45, 0.45, 0.45),
+  dist_sd_slope = c(0.18, 0.18, 0.18, 0.18, 0.35, 0.85, 1.25, 0.18, 0.18, 0.18, 0.18, 0.18),
+  risk_beta_A = c(0.95, 1.05, 1.65, 2.10, 1.05, 1.65, 2.10, 1.10, 1.20, 1.20, 1.20, 1.20),
+  risk_beta_U = c(0.15, 0.12, 0.08, 0.03, 0.12, 0.08, 0.03, 0.18, 0.10, 0.10, 0.10, 0.10),
+  description = c(
+    "No origin error; calibration should not help and may add noise.",
+    "Mean-stage biomarkers; moderate common origin error.",
+    "Mean-stage biomarkers; severe common origin error.",
+    "Favorable sanity regime: severe error, strong mean signal, dense visits, low biomarker noise.",
+    "Distributional biomarkers; moderate common origin error.",
+    "Distributional biomarkers; severe common origin error.",
+    "Favorable distributional sanity regime: severe error, strong dispersion signal, dense visits.",
+    "Weak-stage negative-control regime.",
+    "Biased-shift sensitivity regime; mean-zero anchor is misspecified.",
+    "Heavy-tailed common-shift regime.",
+    "Asymmetric common-shift regime.",
+    "Irregular visits with missing prelandmark biomarkers."
+  ),
+  stringsAsFactors = FALSE
+)
+
+SCENARIO_LABELS <- c(
+  no_error = "No Error",
+  mean_moderate = "Mean Biomarker, Moderate Error",
+  mean_severe = "Mean Biomarker, Severe Error",
+  mean_strong_dense = "Mean Biomarker, Severe Error, Dense Visits",
+  dist_moderate = "Distribution Biomarker, Moderate Error",
+  dist_large = "Distribution Biomarker, Severe Error",
+  dist_strong_dense = "Distribution Biomarker, Severe Error, Dense Visits",
+  weak_stage = "Weak Biomarker Signal",
+  biased_shift = "Biased Origin Shift",
+  heavy_tail = "Heavy-Tailed Origin Error",
+  asymmetric_shift = "Asymmetric Origin Error",
+  irregular_missing = "Irregular Visits With Missing Data"
+)
+
+# Canonical architecture display names (registration x survival layer).
+METHOD_LABELS <- c(
+  "Landmark-Recorded" = "Landmark-Recorded",
+  "Cox-SameFeature-Recorded" = "Recorded-Cox",
+  "MMLM-Recorded" = "MMLM-Recorded",
+  "JM-Recorded" = "JM-Recorded",
+  "RSF-Observed" = "RSF-Observed",
+  "DeepSurv-Observed" = "DeepSurv-Observed",
+  "Bayesian-Dynamic-Observed" = "Bayesian-Dynamic-Observed",
+  "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
+  "SILK" = "SILK-Cox",
+  "Beran-Recorded" = "Recorded-Beran",
+  "Beran-SILK" = "SILK-Beran",
+  "Beran-Oracle-Latent-Age" = "Oracle-Beran",
+  "Oracle-Latent-Age" = "Oracle-Cox",
+  # legacy alias: the redundant mean-trajectory variant present in 6.25 outputs;
+  # not part of the canonical roster, mapped for back-compatible plotting only.
+  "SILK-MeanReg" = "SILK-MeanTraj (suppl.)"
+)
+
+SCHEDULE_LABELS <- c(
+  m2 = "2 Visits",
+  m3 = "3 Visits",
+  m4 = "4 Visits",
+  m8 = "8 Visits",
+  m12 = "12 Visits",
+  m20 = "20 Visits"
+)
+
+pretty_scenario <- function(x) unname(ifelse(x %in% names(SCENARIO_LABELS), SCENARIO_LABELS[x], gsub("_", " ", x)))
+pretty_method <- function(x) unname(ifelse(x %in% names(METHOD_LABELS), METHOD_LABELS[x], gsub("_", " ", x)))
+pretty_schedule <- function(x) unname(ifelse(x %in% names(SCHEDULE_LABELS), SCHEDULE_LABELS[x], x))
+
+get_scenario <- function(scenario_name) {
+  z <- SCENARIOS[SCENARIOS$scenario == scenario_name, , drop = FALSE]
+  if (nrow(z) != 1L) stop("Unknown scenario: ", scenario_name, call. = FALSE)
+  z
+}
+
+make_shift_grid <- function(scenario_name) {
+  sc <- get_scenario(scenario_name)
+  seq(sc$shift_min, sc$shift_max, by = SHIFT_GRID_STEP)
+}
+
+scenario_schedule <- function(scenario_name, fallback = PRIMARY_SCHEDULE) {
+  sc <- get_scenario(scenario_name)
+  sch <- sc$default_schedule[1]
+  if (is.na(sch) || !nzchar(sch)) sch <- fallback
+  sch
+}
+
+# The installed package is the single source of truth for data generation,
+# registration, SILK survival layers, and evaluation. Mirror the simulation's
+# environment-controlled design into package options once, before tasks run.
+registration_cores <- Sys.getenv("SILK_N_CORES", unset = "auto")
+if (grepl("^[0-9]+$", registration_cores)) {
+  registration_cores <- as.integer(registration_cores)
+}
+silk_options(
+  GLOBAL_SEED = GLOBAL_SEED,
+  LATENT_AGE_MIN = LATENT_AGE_MIN,
+  LATENT_AGE_MAX = LATENT_AGE_MAX,
+  A_STAR_CENTER = A_STAR_CENTER,
+  A_STAR_SD = A_STAR_SD,
+  VISIT_SCHEDULES = VISIT_SCHEDULES,
+  PRIMARY_SCHEDULE = PRIMARY_SCHEDULE,
+  SCENARIOS_ALL = SCENARIOS_ALL,
+  TIMEPOINT_SCHEDULES = TIMEPOINT_SCHEDULES,
+  SURV_LAMBDA_D = SURV_LAMBDA_D,
+  SURV_KAPPA_D = SURV_KAPPA_D,
+  SURV_BETA_A = SURV_BETA_A,
+  SURV_BETA_X1 = SURV_BETA_X1,
+  SURV_BETA_X2 = SURV_BETA_X2,
+  SURV_BETA_U = SURV_BETA_U,
+  CENS_RATE = CENS_RATE,
+  EVAL_HORIZON = EVAL_HORIZON,
+  PREDICTION_HORIZONS = PREDICTION_HORIZONS,
+  N_BIO_MEAN = N_BIO_MEAN,
+  N_BIO_DIST = N_BIO_DIST,
+  N_BIO_WEAK = N_BIO_WEAK,
+  SIGMA_BIO_MEAN = SIGMA_BIO_MEAN,
+  SIGMA_BIO_WEAK = SIGMA_BIO_WEAK,
+  DIST_SD_BASE = DIST_SD_BASE,
+  DIST_SD_SLOPE = DIST_SD_SLOPE,
+  DEFAULT_SIGNAL_AMP = DEFAULT_SIGNAL_AMP,
+  DEFAULT_U_BIO_COEF = DEFAULT_U_BIO_COEF,
+  SHIFT_GRID_STEP = SHIFT_GRID_STEP,
+  DEFAULT_SHIFT_GRID_MIN = DEFAULT_SHIFT_GRID_MIN,
+  DEFAULT_SHIFT_GRID_MAX = DEFAULT_SHIFT_GRID_MAX,
+  BIOMARKER_BANDWIDTH = BIOMARKER_BANDWIDTH,
+  BIOMARKER_BANDWIDTH_MAX_POINTS = BIOMARKER_BANDWIDTH_MAX_POINTS,
+  TEMPLATE_INPUT_FEATURES = TEMPLATE_INPUT_FEATURES,
+  TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "lag"),
+  TEMPLATE_FEATURE_SEED = TEMPLATE_FEATURE_SEED,
+  TEMPLATE_RIDGE_LAMBDA = TEMPLATE_RIDGE_LAMBDA,
+  TEMPLATE_NUMERICAL_JITTER = TEMPLATE_NUMERICAL_JITTER,
+  TEMPLATE_QUERY_CHUNK = TEMPLATE_QUERY_CHUNK,
+  H_A_BANDWIDTH = H_A_BANDWIDTH,
+  H_X_BANDWIDTH = H_X_BANDWIDTH,
+  H_X2_BANDWIDTH = H_X2_BANDWIDTH,
+  H_LAG_BANDWIDTH = H_LAG_BANDWIDTH,
+  N_ALT_ITER_MAX = N_ALT_ITER_MAX,
+  ALT_TOL = ALT_TOL,
+  N_STARTS = N_STARTS,
+  RANDOM_START_SD = RANDOM_START_SD,
+  N_FOLDS = N_FOLDS,
+  ANCHOR_MODE = ANCHOR_MODE,
+  PROFILE_TEMPERATURE = PROFILE_TEMPERATURE,
+  PROFILE_LOCAL_RADIUS = PROFILE_LOCAL_RADIUS,
+  N_CORES = registration_cores,
+  METHODS = METHODS,
+  METHOD_ORDER = METHOD_ORDER,
+  SURVIVAL_HISTORY_BIOMARKERS = SURVIVAL_HISTORY_BIOMARKERS,
+  SURVIVAL_HISTORY_KEEP = SURVIVAL_HISTORY_KEEP,
+  SCENARIOS = SCENARIOS,
+  SCENARIO_LABELS = SCENARIO_LABELS,
+  METHOD_LABELS = METHOD_LABELS,
+  SCHEDULE_LABELS = SCHEDULE_LABELS
+)
+
+# ----------------------------- Task plan -------------------------------------
+build_design_cells <- function() {
+  primary <- do.call(rbind, lapply(SCENARIOS$scenario, function(scn) {
+    data.frame(
+      phase = "primary",
+      scenario = scn,
+      n_train = N_TRAIN_GRID,
+      schedule = scenario_schedule(scn),
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  timepoint <- do.call(rbind, lapply(SCENARIOS$scenario, function(scn) {
+    data.frame(
+      phase = "timepoint_extension",
+      scenario = scn,
+      n_train = TIMEPOINT_N_TRAIN,
+      schedule = TIMEPOINT_SCHEDULES,
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  design <- rbind(primary, timepoint)
+  design$cell_id <- seq_len(nrow(design))
+  design$n_test <- N_TEST
+  design$n_rep <- N_REP
+  design$n_visits <- vapply(design$schedule, function(x) length(VISIT_SCHEDULES[[x]]), integer(1))
+  rownames(design) <- NULL
+  design
+}
+
+build_task_plan <- function() {
+  cells <- build_design_cells()
+  plan <- cells[rep(seq_len(nrow(cells)), each = N_REP), , drop = FALSE]
+  plan$rep <- rep(seq_len(N_REP), times = nrow(cells))
+  plan$task_id <- seq_len(nrow(plan))
+  rownames(plan) <- NULL
+  plan
+}
+
+fixed_task_count <- function() nrow(build_task_plan())
+
+select_task_from_env <- function() {
+  task_id_source <- "SILK_TASK_ID"
+  task_id_value <- Sys.getenv("SILK_TASK_ID", unset = "")
+  if (!nzchar(task_id_value)) {
+    task_id_source <- "SLURM_ARRAY_TASK_ID"
+    task_id_value <- Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1")
+  }
+  task_id <- as.integer(task_id_value)
+  plan <- build_task_plan()
+  if (!is.finite(task_id) || task_id < 1L || task_id > nrow(plan)) {
+    stop(
+      "Invalid ", task_id_source, "=", task_id_value,
+      "; expected 1..", nrow(plan),
+      call. = FALSE
+    )
+  }
+  plan[task_id, , drop = FALSE]
+}

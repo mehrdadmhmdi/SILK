@@ -11,4 +11,8 @@
 ^results$
 ^sim codes$
 ^simulation results$
+^example/sim codes($|/)
+^example/simulation results($|/)
+^example/results($|/)
+^example/real_datasets($|/)
 ^SILK\.Rcheck$

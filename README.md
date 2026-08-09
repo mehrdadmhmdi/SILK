@@ -1,6 +1,11 @@
 # SILK: Shift-Invariant Learned Kernel for Survival Prediction
 
-R package implementing the SILK method for absolute risk prediction in the presence of common origin-time measurement error. SILK uses biomarker trajectory registration with shift-invariant kernel features to calibrate landmark ages and improve survival prediction.
+R package implementing SILK for absolute-risk prediction in the presence of
+common origin-time measurement error. The registration layer uses an exact
+Gaussian RBF kernel on standardized biomarker vectors. Because that biomarker
+kernel is characteristic, the implemented RKHS loss retains the
+distribution-identification premise of the method's theory; it is not replaced
+by engineered biomarker moments or a finite biomarker feature map.
 
 ## Installation
 
@@ -27,18 +32,15 @@ test_data  <- generate_dataset_fixed(n = 200, scenario_name = "mean_moderate", s
 fit <- fit_silk(train_data$subjects, train_data$visits,
                 shift_range = c(-12, 12), seed = 1)
 
-# Exact kernel calculation is the default. It can also be requested explicitly
-# with kernel_approx = "exact" or kernel_approx = "none".
-fit_exact <- fit_silk(train_data$subjects, train_data$visits,
-                      shift_range = c(-12, 12),
-                      kernel = "rbf", kernel_approx = "none",
-                      seed = 1)
-
-# Fast large-sample fit with random Fourier features
-fit_fast <- fit_silk(train_data$subjects, train_data$visits,
-                     shift_range = c(-12, 12),
-                     kernel = "rbf", kernel_approx = "rff",
-                     rff_dim = 512, seed = 1)
+# Fit the registration once when several survival layers use the same shifts.
+registration <- fit_silk_registration(
+  train_data$subjects, train_data$visits,
+  shift_range = c(-12, 12), seed = 1
+)
+fit <- fit_silk(
+  train_data$subjects, train_data$visits,
+  registration = registration
+)
 
 # Predict absolute risk at horizons 1, 2, 3, 4
 predictions <- predict_silk(fit, test_data$subjects, test_data$visits)
@@ -52,12 +54,11 @@ metrics$summary
 ## Comparators and Diagnostics
 
 The package includes the manuscript comparators used to separate calibration
-from ordinary history modeling. `fit_same_feature_recorded_cox()` fits a Cox
-model with the same history features as SILK but evaluated at the recorded
-landmark age, while `fit_silk(..., feature_type = "mean")` fits the mean-only
-registration comparator. `fit_beran_risk()` and `predict_beran_risk()` provide
-kernel conditional Kaplan-Meier/Beran risks for recorded, SILK-calibrated, or
-oracle latent-state inputs.
+from ordinary history modeling. `fit_same_feature_recorded_cox()` is the
+same-history-feature, recorded-age ablation. It is a diagnostic for what drives
+the gain, not a second SILK kernel. `fit_beran_silk()` reuses the same
+characteristic-kernel registration with a Beran survival layer; pass the same
+`registration` object to both Cox and Beran fits to avoid refitting it.
 
 Registration fits carry profile-gap diagnostics (`gap`, `gap_q1`, and
 `gap_q2`) so weakly identified shift profiles can be flagged instead of treated
@@ -115,14 +116,15 @@ silk_opt("SHIFT_GRID_STEP")
 # Change registration grid resolution
 silk_options(SHIFT_GRID_STEP = 0.1, N_FOLDS = 10)
 
-# Choose the registration kernel and approximation.
-# Kernels: "rbf", "matern", "polynomial", "linear".
-# Exact calculation: REGISTRATION_KERNEL_APPROX = "exact" or "none".
-# RFF acceleration: REGISTRATION_KERNEL_APPROX = "rff".
-silk_options(REGISTRATION_KERNEL = "matern",
-             REGISTRATION_KERNEL_APPROX = "rff",
-             KERNEL_RFF_DIM = 512,
-             KERNEL_MATERN_NU = 1.5)
+# The biomarker kernel is always the exact Gaussian RBF kernel. Its bandwidth
+# may use the median-distance rule or a fixed positive value.
+silk_options(BIOMARKER_BANDWIDTH = "median")
+
+# These settings change only the scalar template-input kernel and numerical
+# ridge fit; they never approximate the characteristic biomarker kernel.
+silk_options(TEMPLATE_INPUT_FEATURES = 32,
+             TEMPLATE_RIDGE_LAMBDA = 0.001,
+             N_CORES = 4)
 
 # See all defaults
 str(silk_default_options())

@@ -136,6 +136,10 @@ make_visits <- function(subjects, lags, sc) {
 
   for (i in seq_len(n)) {
     lags_i <- lags
+    # Preserve the nominal schedule position before irregular timing and
+    # missingness are applied. Renumbering retained visits would incorrectly
+    # align different biological positions in the registration template.
+    visit_position <- seq_along(lags_i)
     if (isTRUE(sc$irregular)) {
       jitter <- stats::runif(length(lags_i), min = -0.25, max = 0.25)
       jitter[lags_i == 0] <- 0
@@ -152,6 +156,7 @@ make_visits <- function(subjects, lags, sc) {
     }
 
     lags_i <- lags_i[keep]
+    visit_position <- visit_position[keep]
     visit_age_star <- subjects$A_star[i] - lags_i
     visit_age_obs <- visit_age_star + subjects$eps[i]
     B <- r_biomarkers(
@@ -166,7 +171,7 @@ make_visits <- function(subjects, lags, sc) {
     rows[[i]] <- cbind(
       data.frame(
         id = subjects$id[i],
-        visit = seq_along(lags_i),
+        visit = visit_position,
         lag = lags_i,
         A_star_il = visit_age_star,
         A_obs_il = visit_age_obs,

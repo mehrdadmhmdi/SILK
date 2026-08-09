@@ -23,11 +23,9 @@ method_palette <- function() {
     "RSF-Observed" = "#17BECF",
     "TimeError-Integrated-Landmark" = "#2B8CBE",
     "SILK-MeanReg" = "#FDB863",
-    "SILK-LinearMMD" = "#E08214",
     SILK = UIUC_ORANGE,
     "Beran-Recorded" = "#A6CEE3",
     "Beran-SILK" = "#FB9A99",
-    "Beran-SILK-Linear" = "#E31A1C",
     "Beran-Oracle-Latent-Age" = "#6A3D9A",
     "Oracle-Latent-Age" = UIUC_BLUE
   )

@@ -41,6 +41,65 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
   seq(rng[1], rng[2], by = step)
 }
 
+#' Fit the SILK registration layer
+#'
+#' Estimates subject-specific origin shifts by cross-fitted registration. The
+#' biomarker discrepancy is the exact RKHS loss induced by a Gaussian RBF
+#' kernel on standardized biomarker vectors. This kernel is characteristic;
+#' the implementation does not replace it with biomarker moments or a finite
+#' biomarker feature map.
+#'
+#' @param train_subjects Data frame of training subjects.
+#' @param train_visits Data frame of training visits with biomarker columns.
+#' @param shift_grid Numeric vector of candidate origin shifts.
+#' @param shift_range Numeric vector of length two used to construct the grid
+#'   when \code{shift_grid} is omitted.
+#' @param seed Integer or NULL. Random seed for folds and multistart fitting.
+#' @return A \code{silk_registration} object containing cross-fitted training
+#'   shifts and the final template used for new subjects.
+#' @export
+fit_silk_registration <- function(train_subjects, train_visits,
+                                  shift_grid = NULL, shift_range = NULL,
+                                  seed = NULL) {
+  grid <- resolve_silk_shift_grid(shift_grid, shift_range)
+  crossfit_registration(train_visits, train_subjects, grid = grid, seed = seed)
+}
+
+#' Predict origin shifts from a SILK registration
+#'
+#' @param registration Fitted object from \code{fit_silk_registration}.
+#' @param new_visits Visit data for new subjects.
+#' @param shift_grid Optional candidate grid. By default the fitted grid is
+#'   reused.
+#' @return Data frame with estimated shifts and profile-loss diagnostics.
+#' @export
+predict_silk_registration <- function(registration, new_visits, shift_grid = NULL) {
+  if (!inherits(registration, "silk_registration") ||
+      is.null(registration$final_template)) {
+    stop("registration must be a fitted silk_registration object.", call. = FALSE)
+  }
+  grid <- if (is.null(shift_grid)) registration$grid else {
+    value <- sort(unique(as.numeric(shift_grid)))
+    value <- value[is.finite(value)]
+    if (length(value) < 2L) stop("shift_grid must contain at least two values.", call. = FALSE)
+    value
+  }
+  predict_registration_shift(registration$final_template, new_visits, grid)
+}
+
+#' @keywords internal
+validate_silk_registration <- function(registration, train_subjects) {
+  if (!inherits(registration, "silk_registration") ||
+      is.null(registration$train_stage) || is.null(registration$final_template)) {
+    stop("registration must be a fitted silk_registration object.", call. = FALSE)
+  }
+  missing_ids <- setdiff(train_subjects$id, registration$train_stage$id)
+  if (length(missing_ids)) {
+    stop("registration is missing training subject ids.", call. = FALSE)
+  }
+  registration
+}
+
 #' Fit a SILK model
 #'
 #' Fits the SILK (Shift-Invariant Learned Kernel) model for absolute risk
@@ -56,18 +115,10 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' @param shift_range Numeric vector of length two giving the lower and upper
 #'   candidate shift values. Defaults to \code{DEFAULT_SHIFT_GRID_MIN} and
 #'   \code{DEFAULT_SHIFT_GRID_MAX}.
-#' @param feature_type Registration feature map. \code{"silk"} uses the
-#'   distributional SILK feature map; \code{"mean"} uses mean/path features.
 #' @param method Character label stored in prediction outputs.
-#' @param kernel Registration kernel. One of \code{"rbf"}, \code{"matern"},
-#'   \code{"polynomial"}, or \code{"linear"}. Defaults to
-#'   \code{silk_opt("REGISTRATION_KERNEL")}.
-#' @param kernel_approx Kernel approximation. Use \code{"exact"} (or
-#'   \code{"none"}) for the full kernel calculation, or \code{"rff"} for
-#'   random Fourier features. RFF is available for RBF and Matern kernels.
-#' @param rff_dim Number of random Fourier features when
-#'   \code{kernel_approx = "rff"}.
-#' @param rff_seed Integer or NULL. Random seed for RFF basis generation.
+#' @param registration Optional fitted object from
+#'   \code{fit_silk_registration}. Supplying it lets multiple survival layers
+#'   reuse exactly the same cross-fitted registration.
 #' @return A fitted SILK model object (list) for use with \code{predict_silk}.
 #' @export
 #' @examples
@@ -76,27 +127,26 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' fit <- fit_silk(dat$subjects, dat$visits, shift_range = c(-12, 12), seed = 1)
 #' }
 fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NULL,
-                     shift_range = NULL, feature_type = c("silk", "mean"),
-                     method = "SILK",
-                     kernel = NULL, kernel_approx = NULL,
-                     rff_dim = NULL, rff_seed = seed) {
-  grid <- resolve_silk_shift_grid(shift_grid, shift_range)
-  feature_type <- match.arg(feature_type)
-  kernel_config <- registration_kernel_config(
-    kernel = kernel,
-    approximation = kernel_approx,
-    rff_dim = rff_dim,
-    rff_seed = rff_seed
-  )
-  cf <- crossfit_registration(
-    train_visits, train_subjects,
-    feature_type = feature_type,
-    grid = grid,
-    seed = seed,
-    kernel_config = kernel_config
-  )
+                     shift_range = NULL, method = "SILK", registration = NULL) {
+  if (is.null(registration)) {
+    registration <- fit_silk_registration(
+      train_subjects, train_visits,
+      shift_grid = shift_grid, shift_range = shift_range, seed = seed
+    )
+  } else {
+    registration <- validate_silk_registration(registration, train_subjects)
+    if (!is.null(shift_grid) || !is.null(shift_range)) {
+      requested_grid <- resolve_silk_shift_grid(shift_grid, shift_range)
+      if (!isTRUE(all.equal(requested_grid, registration$grid))) {
+        stop("The supplied registration and requested shift grid differ.", call. = FALSE)
+      }
+    }
+  }
+  grid <- registration$grid
   train_history <- make_history_features(train_subjects, train_visits)
-  train_stage <- cf$train_stage$S_hat[match(train_subjects$id, cf$train_stage$id)]
+  train_stage <- registration$train_stage$S_hat[
+    match(train_subjects$id, registration$train_stage$id)
+  ]
   x <- silk_history_covariates(train_subjects, train_history, train_stage)
   risk_fit <- fit_residual_cox(train_subjects, x)
   list(
@@ -104,12 +154,17 @@ fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NUL
     grid = grid,
     shift_grid = grid,
     shift_range = range(grid),
-    feature_type = feature_type,
-    kernel = kernel_config,
-    registration = cf,
+    biomarker_kernel = list(
+      name = "gaussian_rbf",
+      characteristic = TRUE,
+      bandwidth = registration$final_template$biomarker_builder$bandwidth,
+      bandwidth_rule = registration$final_template$biomarker_builder$bandwidth_rule
+    ),
+    registration = registration,
     train_history = train_history,
     train_stage = train_stage,
-    fit = risk_fit
+    fit = risk_fit,
+    implementation = registration$implementation
   )
 }
 
@@ -161,13 +216,38 @@ predict_same_feature_recorded_cox <- function(fit, test_subjects, test_visits,
   )
 }
 
-#' @keywords internal
+#' Beran and latent-age oracle survival layers
+#'
+#' Convenience fits and prediction methods used by the simulation study. The
+#' oracle methods require latent ages and are therefore simulation-only.
+#'
+#' @param train_subjects Training subject data frame.
+#' @param train_visits Training visit data frame.
+#' @param test_subjects Test subject data frame.
+#' @param test_visits Test visit data frame.
+#' @param fit A fitted object from the corresponding fit function.
+#' @param horizons Positive prediction horizons.
+#' @param shift_grid Candidate registration-shift grid.
+#' @param shift_range Two-element candidate shift range.
+#' @param seed Integer or NULL.
+#' @param registration Optional fitted object from
+#'   \code{fit_silk_registration}; supplying it lets Cox and Beran survival
+#'   layers share one registration fit.
+#' @param fold_id Fold identifier for bookkeeping.
+#' @param replicate_id Replicate identifier for bookkeeping.
+#' @param n_train_setting Training-size label for bookkeeping.
+#' @param time_grid_setting Time-grid label for bookkeeping.
+#' @return A fitted survival-layer object for fit functions, or a standardized
+#'   prediction frame for prediction functions.
+#' @name silk_survival_layers
+#' @export
 fit_beran_recorded <- function(train_subjects) {
   state <- beran_state_covariates(train_subjects, train_subjects$A_obs)
   list(method = "Beran-Recorded", fit = fit_beran_risk(train_subjects, state))
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 predict_beran_recorded <- function(fit, test_subjects,
                                    horizons = NULL,
                                    fold_id = 1L, replicate_id = 1L,
@@ -185,28 +265,40 @@ predict_beran_recorded <- function(fit, test_subjects,
   )
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 fit_beran_silk <- function(train_subjects, train_visits, shift_grid = NULL,
-                           shift_range = NULL, seed = NULL) {
-  grid <- resolve_silk_shift_grid(shift_grid, shift_range)
-  cf <- crossfit_registration(
-    train_visits, train_subjects,
-    feature_type = "silk",
-    grid = grid,
-    seed = seed,
-    kernel_config = registration_kernel_config()
-  )
-  train_stage <- cf$train_stage$S_hat[match(train_subjects$id, cf$train_stage$id)]
+                           shift_range = NULL, seed = NULL, registration = NULL) {
+  if (is.null(registration)) {
+    registration <- fit_silk_registration(
+      train_subjects, train_visits,
+      shift_grid = shift_grid, shift_range = shift_range, seed = seed
+    )
+  } else {
+    registration <- validate_silk_registration(registration, train_subjects)
+    if (!is.null(shift_grid) || !is.null(shift_range)) {
+      requested_grid <- resolve_silk_shift_grid(shift_grid, shift_range)
+      if (!isTRUE(all.equal(requested_grid, registration$grid))) {
+        stop("The supplied registration and requested shift grid differ.", call. = FALSE)
+      }
+    }
+  }
+  grid <- registration$grid
+  train_stage <- registration$train_stage$S_hat[
+    match(train_subjects$id, registration$train_stage$id)
+  ]
   state <- beran_state_covariates(train_subjects, train_stage)
   list(
     method = "Beran-SILK",
     grid = grid,
-    registration = cf,
-    fit = fit_beran_risk(train_subjects, state)
+    registration = registration,
+    fit = fit_beran_risk(train_subjects, state),
+    implementation = registration$implementation
   )
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 predict_beran_silk <- function(fit, test_subjects, test_visits,
                                horizons = NULL,
                                fold_id = 1L, replicate_id = 1L,
@@ -272,20 +364,23 @@ predict_silk <- function(fit, test_subjects, test_visits,
   )
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 fit_oracle_latent_age <- function(train_subjects, train_visits) {
   x <- landmark_covariates(train_subjects, train_visits, clock = "latent")
   fit <- fit_residual_cox(train_subjects, x)
   list(method = "Oracle-Latent-Age", fit = fit)
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 fit_beran_oracle_latent_age <- function(train_subjects) {
   state <- beran_state_covariates(train_subjects, train_subjects$A_star)
   list(method = "Beran-Oracle-Latent-Age", fit = fit_beran_risk(train_subjects, state))
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 predict_oracle_latent_age <- function(fit, test_subjects, test_visits,
                                       horizons = NULL,
                                       fold_id = 1L, replicate_id = 1L,
@@ -306,7 +401,8 @@ predict_oracle_latent_age <- function(fit, test_subjects, test_visits,
   )
 }
 
-#' @keywords internal
+#' @rdname silk_survival_layers
+#' @export
 predict_beran_oracle_latent_age <- function(fit, test_subjects,
                                             horizons = NULL,
                                             fold_id = 1L, replicate_id = 1L,

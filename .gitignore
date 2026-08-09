@@ -1,5 +1,13 @@
 example/results/
-example/sim codes/
+# Track the cluster implementation while excluding generated data and logs.
+!example/sim codes/
+example/sim codes/*
+!example/sim codes/R/
+example/sim codes/R/*
+!example/sim codes/R/*.R
+!example/sim codes/*.R
+!example/sim codes/*.sh
+!example/sim codes/*.sbatch
 example/real_datasets/MWCCS
 example/real_datasets/WIHS
 git/

@@ -5,16 +5,15 @@ Version: 0.1.0
 Authors@R: person("Mehrdad", "Mohammadi", email = "mohammadi.mehrdad93@gmail.com", role = c("aut", "cre"))
 Author: Mehrdad Mohammadi [aut, cre]
 Maintainer: Mehrdad Mohammadi <mohammadi.mehrdad93@gmail.com>
-Description: Implements the SILK (Shift-Invariant Learned Kernel) method for 
-    absolute risk prediction in the presence of common origin-time measurement error.
-    SILK uses biomarker trajectory registration with shift-invariant kernel features 
-    to calibrate landmark ages and improve survival prediction. Includes tools for 
-    data generation under various error scenarios, model evaluation with Brier score 
-    and AUC metrics, and publication-quality visualization.
+Description: Implements the SILK (Shift-Invariant Learned Kernel) method for
+    absolute risk prediction under common origin-time measurement error. SILK
+    registers biomarker trajectories using an exact characteristic Gaussian
+    biomarker kernel and a conditional mean embedding, then calibrates landmark
+    ages for survival prediction. Includes simulation, prediction evaluation,
+    and publication-quality visualization tools.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.3.0
 Depends: R (>= 3.5.0)
 Imports:
     survival,
@@ -29,6 +28,9 @@ Imports:
     grid
 Suggests:
     testthat (>= 3.0.0),
+    withr,
     pkgload,
     ranger,
     JMbayes2
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0
