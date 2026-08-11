@@ -117,6 +117,10 @@ predict_deepsurv_observed <- function(fit, test_subjects, test_visits,
   x <- observed_profile_covariates(test_subjects, test_visits)
   x <- align_covariate_columns(x, fit$columns)
   x <- apply_standardizer(x, fit)
+  # survivalmodels validates newdata as a data.frame. Matrix-preserving
+  # standardization is useful internally, but must not leak across this API
+  # boundary (the confirmatory run fitted successfully and then failed here).
+  x <- as.data.frame(x, check.names = FALSE)
   surv <- predict(fit$fit, newdata = x, type = "survival")
   surv <- as.matrix(surv)
   if (nrow(surv) != nrow(test_subjects) && ncol(surv) == nrow(test_subjects)) {

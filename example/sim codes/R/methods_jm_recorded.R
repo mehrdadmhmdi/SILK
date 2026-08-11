@@ -1,10 +1,89 @@
 # =============================================================================
 # methods_jm_recorded.R
-# JM-Recorded: recorded-time current-value joint-model comparator.
+# JM-Recorded: current-value joint-model comparator using recorded biomarkers.
 # Uses a simple current-value association between one longitudinal biomarker and
-# the event process on the recorded clock. No slope association is included.
+# the event process. Internally, time is expressed as positive follow-up time
+# relative to each subject's recorded landmark. This is the usual landmark
+# follow-up formulation and avoids negative-time failures in held-out subjects.
+# No slope association is included.
 # References: Rizopoulos (2012, 2017); JMbayes2 package; nlme and survival.
 # =============================================================================
+
+prepare_jm_followup_clock <- function(subjects, visits,
+                                      landmark_time = JMBAYES_LANDMARK_TIME) {
+  subject_index <- match(visits$id, subjects$id)
+  if (anyNA(subject_index)) {
+    stop("JM-Recorded visits contain subject IDs absent from the subject table.", call. = FALSE)
+  }
+
+  landmark <- as.numeric(subjects$A_obs)
+  visit_landmark <- landmark[subject_index]
+  out_subjects <- subjects
+  out_visits <- visits
+  out_visits$A_obs_il <- as.numeric(visits$A_obs_il) - visit_landmark + landmark_time
+  out_subjects$T_obs <- landmark_time + as.numeric(subjects$T_obs) - landmark
+  out_subjects$C_obs <- landmark_time + as.numeric(subjects$C_obs) - landmark
+  out_subjects$A_obs <- landmark_time
+
+  internal_times <- c(
+    out_visits$A_obs_il,
+    out_subjects$A_obs,
+    out_subjects$T_obs,
+    out_subjects$C_obs
+  )
+  if (any(!is.finite(internal_times))) {
+    stop("JM-Recorded follow-up-clock transformation produced non-finite times.", call. = FALSE)
+  }
+  if (any(pmin(out_subjects$T_obs, out_subjects$C_obs) <= landmark_time)) {
+    stop("JM-Recorded requires event/censoring times strictly after the landmark.", call. = FALSE)
+  }
+
+  list(subjects = out_subjects, visits = out_visits)
+}
+
+fit_jm_longitudinal_model <- function(visits) {
+  if (!requireNamespace("nlme", quietly = TRUE)) {
+    stop("JM-Recorded requires the nlme package.", call. = FALSE)
+  }
+  biomarker <- first_biomarker_col(visits)
+  dat <- visits
+  dat$marker_value <- as.numeric(dat[[biomarker]])
+  required <- c("id", "marker_value", "A_obs_il", "X1", "X2")
+  dat <- dat[stats::complete.cases(dat[, required, drop = FALSE]), , drop = FALSE]
+  dat$id <- droplevels(factor(dat$id))
+  if (!nrow(dat) || length(unique(dat$id)) < 2L) {
+    stop("JM-Recorded has insufficient complete longitudinal observations.", call. = FALSE)
+  }
+
+  fit_one <- function(random_formula) {
+    tryCatch(
+      suppressWarnings(nlme::lme(
+        marker_value ~ A_obs_il + X1 + X2,
+        random = random_formula,
+        data = dat,
+        na.action = stats::na.omit,
+        control = nlme::lmeControl(
+          maxIter = 100,
+          msMaxIter = 100,
+          niterEM = 50,
+          returnObject = TRUE
+        )
+      )),
+      error = function(e) NULL
+    )
+  }
+
+  fit <- fit_one(~ A_obs_il | id)
+  random_structure <- "random intercept and recorded-time slope"
+  if (is.null(fit)) {
+    fit <- fit_one(~ 1 | id)
+    random_structure <- "random intercept fallback"
+  }
+  if (is.null(fit)) {
+    stop("JM-Recorded could not fit either longitudinal mixed model.", call. = FALSE)
+  }
+  list(fit = fit, biomarker = biomarker, random_structure = random_structure)
+}
 
 fit_jm_recorded <- function(train_subjects, train_visits) {
   if (!isTRUE(ENABLE_JMBAYES2)) {
@@ -14,22 +93,10 @@ fit_jm_recorded <- function(train_subjects, train_visits) {
     stop("JM-Recorded requires the JMbayes2 package, which is not installed.", call. = FALSE)
   }
 
-  event_time <- pmin(train_subjects$T_obs, train_subjects$C_obs)
-  min_recorded_time <- min(c(event_time, train_subjects$A_obs, train_visits$A_obs_il), na.rm = TRUE)
-  time_shift <- if (is.finite(min_recorded_time) && min_recorded_time <= 0) abs(min_recorded_time) + 1e-3 else 0
-  jm_subjects <- train_subjects
-  jm_visits <- train_visits
-  if (time_shift > 0) {
-    jm_subjects$A_obs <- jm_subjects$A_obs + time_shift
-    jm_subjects$T_obs <- jm_subjects$T_obs + time_shift
-    jm_subjects$C_obs <- jm_subjects$C_obs + time_shift
-    jm_visits$A_obs_il <- jm_visits$A_obs_il + time_shift
-  }
-
-  marker_model <- fit_current_value_mixed_model(jm_subjects, jm_visits)
-  if (is.null(marker_model$fit)) {
-    stop("JM-Recorded could not fit the recorded-time longitudinal mixed model.", call. = FALSE)
-  }
+  jm_data <- prepare_jm_followup_clock(train_subjects, train_visits)
+  jm_subjects <- jm_data$subjects
+  jm_visits <- jm_data$visits
+  marker_model <- fit_jm_longitudinal_model(jm_visits)
 
   event_dat <- data.frame(
     id = jm_subjects$id,
@@ -53,8 +120,11 @@ fit_jm_recorded <- function(train_subjects, train_visits) {
     marker_model = marker_model,
     cox_fit = cox_fit,
     jm_fit = jm_fit,
-    time_shift = time_shift,
-    implementation = "JMbayes2 current-value dynamic prediction on recorded clock"
+    landmark_time = JMBAYES_LANDMARK_TIME,
+    implementation = paste0(
+      "JMbayes2 current-value dynamic prediction on a recorded-landmark follow-up clock; ",
+      marker_model$random_structure
+    )
   )
 }
 
@@ -82,7 +152,20 @@ extract_jmbayes2_event_risk <- function(pred, target_times) {
 
   if (length(time_col)) {
     tt <- as.numeric(df[[time_col[1]]])
-    out <- stats::approx(tt, risk, xout = target_times, rule = 2, ties = "ordered")$y
+    keep <- is.finite(tt) & is.finite(risk)
+    tt <- tt[keep]
+    risk <- risk[keep]
+    if (!length(tt)) {
+      stop("JMbayes2 prediction returned no finite event-risk values.", call. = FALSE)
+    }
+    ord <- order(tt)
+    tt <- tt[ord]
+    risk <- risk[ord]
+    if (length(tt) == 1L) {
+      out <- rep(risk, length(target_times))
+    } else {
+      out <- stats::approx(tt, risk, xout = target_times, rule = 2, ties = mean)$y
+    }
   } else if (length(risk) >= length(target_times)) {
     out <- tail(risk, length(target_times))
   } else {
@@ -97,24 +180,63 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
                                 n_train_setting = NA,
                                 time_grid_setting = NA) {
   b <- fit$marker_model$biomarker
-  time_shift <- if (!is.null(fit$time_shift)) fit$time_shift else 0
+  landmark_time <- if (!is.null(fit$landmark_time)) {
+    as.numeric(fit$landmark_time)
+  } else {
+    JMBAYES_LANDMARK_TIME
+  }
   risk <- matrix(NA_real_, nrow = nrow(test_subjects), ncol = length(horizons))
   for (i in seq_len(nrow(test_subjects))) {
-    sv <- test_visits[test_visits$id == test_subjects$id[i], , drop = FALSE]
-    sv$marker_value <- sv[[b]]
-    sv$id <- factor(sv$id)
-    sv$A_obs_il <- sv$A_obs_il + time_shift
-    sv$Y_obs <- test_subjects$A_obs[i] + time_shift
-    sv$status <- 0
+    subject_id <- test_subjects$id[i]
+    sv <- test_visits[test_visits$id == subject_id, , drop = FALSE]
+    if (!nrow(sv)) {
+      stop("JM-Recorded has no longitudinal history for test subject ", subject_id, ".", call. = FALSE)
+    }
+    sv$marker_value <- as.numeric(sv[[b]])
+    sv$A_obs_il <- as.numeric(sv$A_obs_il) - as.numeric(test_subjects$A_obs[i]) + landmark_time
     sv$X1 <- test_subjects$X1[i]
     sv$X2 <- test_subjects$X2[i]
-    target_times <- test_subjects$A_obs[i] + time_shift + horizons
-    pred <- stats::predict(
-      fit$jm_fit,
-      newdata = sv,
-      process = "event",
-      times = target_times,
-      control = list(cores = 1L, n_samples = JMBAYES_PRED_N_SAMPLES, return_newdata = TRUE)
+    required_finite <- is.finite(sv$A_obs_il) & is.finite(sv$X1) & is.finite(sv$X2)
+    sv <- sv[required_finite, , drop = FALSE]
+    if (!nrow(sv)) {
+      stop("JM-Recorded has no finite longitudinal times for test subject ", subject_id, ".", call. = FALSE)
+    }
+    sv <- sv[order(sv$A_obs_il), , drop = FALSE]
+    finite_marker <- is.finite(sv$marker_value)
+    use_y <- any(finite_marker)
+    if (use_y) {
+      sv <- sv[finite_marker, , drop = FALSE]
+    } else {
+      sv <- tail(sv, 1L)
+      sv$marker_value <- 0
+    }
+    sv$id <- factor(sv$id)
+    # JMbayes2 0.6.0 is most reliable for a single-outcome model when the
+    # longitudinal and event variables share one data frame. It takes the last
+    # event row per subject internally, while retaining the full marker history.
+    sv$Y_obs <- landmark_time
+    sv$status <- 0
+    target_times <- landmark_time + horizons
+    pred <- tryCatch(
+      stats::predict(
+        fit$jm_fit,
+        newdata = sv,
+        process = "event",
+        times = target_times,
+        control = list(
+          cores = 1L,
+          n_samples = JMBAYES_PRED_N_SAMPLES,
+          use_Y = use_y,
+          return_newdata = TRUE
+        )
+      ),
+      error = function(e) {
+        stop(
+          "JM-Recorded prediction failed for test subject ", subject_id,
+          ": ", conditionMessage(e),
+          call. = FALSE
+        )
+      }
     )
     risk[i, ] <- extract_jmbayes2_event_risk(pred, target_times)
   }

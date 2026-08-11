@@ -160,13 +160,26 @@ make_biomarker_kernel_builder <- function(visits_df, biomarker_kernel = NULL) {
   scaler <- make_scaler(biomarkers)
   standardized <- apply_scaler(biomarkers, scaler)
   specification <- silk_opt("BIOMARKER_BANDWIDTH")
+  # Multiplier on the selected bandwidth. The confirmatory default is 1, which
+  # reproduces the median heuristic exactly. Values other than 1 are used only
+  # to run a prespecified bandwidth ladder as a sensitivity analysis; the median
+  # heuristic is measured in standardized biomarker-space units, not years, so
+  # it is not assumed to be misscaled until the ladder shows it is.
+  bandwidth_scale <- suppressWarnings(
+    as.numeric(silk_opt("BIOMARKER_BANDWIDTH_SCALE"))[1L]
+  )
+  if (!is.finite(bandwidth_scale) || bandwidth_scale <= 0) bandwidth_scale <- 1
   numeric_bandwidth <- suppressWarnings(as.numeric(specification)[1L])
   if (is.finite(numeric_bandwidth) && numeric_bandwidth > 0) {
     bandwidth <- numeric_bandwidth
     bandwidth_rule <- "fixed"
   } else if (identical(tolower(trimws(as.character(specification)[1L])), "median")) {
-    bandwidth <- median_distance_bandwidth(standardized)
-    bandwidth_rule <- "median_pairwise_distance"
+    bandwidth <- median_distance_bandwidth(standardized) * bandwidth_scale
+    bandwidth_rule <- if (isTRUE(all.equal(bandwidth_scale, 1))) {
+      "median_pairwise_distance"
+    } else {
+      paste0("median_pairwise_distance_x", format(bandwidth_scale))
+    }
   } else {
     stop(
       "BIOMARKER_BANDWIDTH must be a positive number or 'median'.",
@@ -214,10 +227,39 @@ longitudinal_kernel_signal <- function(visits_df, standardized, builder) {
     similarities <- c(similarities, kernel[upper])
     negative_lag_distance <- c(negative_lag_distance, -lag_distance[upper])
   }
+  # A zero-variance lag-gap design (for example a balanced two-visit schedule,
+  # in which every subject contributes exactly one pair at the same lag gap)
+  # makes this correlation mathematically undefined. That is a property of the
+  # visit design, not evidence that biomarkers carry no longitudinal signal, so
+  # the statistic returns NA_real_ ("not evaluable") rather than 0. Callers must
+  # treat NA as "gate not evaluable, do not disable"; see the guards in
+  # biomarker_clock_initial_shift() and template_clock_initial_shift().
   if (length(similarities) < 3L || stats::sd(similarities) < 1e-12 ||
-      stats::sd(negative_lag_distance) < 1e-12) return(0)
+      stats::sd(negative_lag_distance) < 1e-12) return(NA_real_)
   value <- suppressWarnings(stats::cor(similarities, negative_lag_distance))
-  if (is.finite(value)) value else 0
+  if (is.finite(value)) value else NA_real_
+}
+
+#' Should the longitudinal-signal gate disable the biomarker clock?
+#'
+#' Returns TRUE only when the gate statistic is evaluable and falls below
+#' CLOCK_SIGNAL_MIN. A non-evaluable statistic (NA) leaves the clock enabled:
+#' an undefined diagnostic is not evidence of absent signal.
+#'
+#' @param longitudinal_signal Numeric scalar or NA from
+#'   \code{longitudinal_kernel_signal}.
+#' @return Logical scalar.
+#' @keywords internal
+clock_gate_disables <- function(longitudinal_signal) {
+  minimum <- suppressWarnings(as.numeric(silk_opt("CLOCK_SIGNAL_MIN")))
+  if (!length(minimum) || !is.finite(minimum[1L])) return(FALSE)
+  # Length-zero inputs (NULL, numeric(0), a dropped list element) are as
+  # non-evaluable as NA and must not be fed to `||`, which errors on
+  # zero-length operands. Reduce to a single finite value or bail out.
+  if (!length(longitudinal_signal)) return(FALSE)
+  value <- suppressWarnings(as.numeric(longitudinal_signal)[1L])
+  if (!is.finite(value)) return(FALSE)
+  value < minimum[1L]
 }
 
 #' @keywords internal
@@ -834,8 +876,7 @@ biomarker_clock_initial_shift <- function(visits_df, subjects, ids,
   stage <- ifelse(stage_count > 0L, stage_sum / pmax(stage_count, 1L), fallback)
   signal_r2 <- if (clock_sst > 0) 1 - clock_sse / clock_sst else NA_real_
   longitudinal_signal <- registration_data$longitudinal_signal
-  signal_minimum <- as.numeric(silk_opt("CLOCK_SIGNAL_MIN"))[1L]
-  if (!is.finite(longitudinal_signal) || longitudinal_signal < signal_minimum) {
+  if (clock_gate_disables(longitudinal_signal)) {
     stage <- subject_landmark
   }
   anchor <- anchor_basis(subjects, ids)
@@ -874,12 +915,23 @@ fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
   best <- NULL
   best_objective <- Inf
   best_start <- NA_character_
+  # The manuscript's diagnostics section promises "the spread of attained
+  # objectives across starts". Retain every attained objective, not only the
+  # winner, so multistart stability can be reported and audited.
+  start_objectives <- stats::setNames(
+    rep(NA_real_, length(starts)), names(starts)
+  )
   for (name in names(starts)) {
-    fit <- fit_registration_train(
-      visits_df, subjects, starts[[name]], grid,
-      registration_data = registration_data
+    fit <- tryCatch(
+      fit_registration_train(
+        visits_df, subjects, starts[[name]], grid,
+        registration_data = registration_data
+      ),
+      error = function(e) NULL
     )
+    if (is.null(fit)) next
     objective <- registration_total_objective(fit$template, visits_df, fit$e_train)
+    start_objectives[[name]] <- objective
     if (is.finite(objective) && objective < best_objective) {
       best <- fit
       best_objective <- objective
@@ -887,8 +939,28 @@ fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
     }
   }
   if (is.null(best)) stop("Every SILK registration start failed.", call. = FALSE)
+
+  finite_objectives <- start_objectives[is.finite(start_objectives)]
+  sorted <- sort(finite_objectives)
   best$best_obj <- best_objective
   best$best_start <- best_start
+  best$start_objectives <- start_objectives
+  best$multistart <- list(
+    n_starts = length(starts),
+    n_successful_starts = length(finite_objectives),
+    best_start = best_start,
+    best_objective = best_objective,
+    objective_spread = if (length(finite_objectives) >= 2L) {
+      max(finite_objectives) - min(finite_objectives)
+    } else NA_real_,
+    second_best_gap = if (length(sorted) >= 2L) {
+      unname(sorted[2L] - sorted[1L])
+    } else NA_real_,
+    start_names = paste(names(start_objectives), collapse = "|"),
+    start_objective_values = paste(
+      formatC(start_objectives, format = "g", digits = 10), collapse = "|"
+    )
+  )
   best
 }
 
@@ -934,9 +1006,7 @@ refine_profile_min <- function(loss_row, grid) {
 #' @keywords internal
 template_clock_initial_shift <- function(template, visits_df) {
   ids <- sort(unique(visits_df$id))
-  signal_minimum <- as.numeric(silk_opt("CLOCK_SIGNAL_MIN"))[1L]
-  if (!is.finite(template$longitudinal_signal) ||
-      template$longitudinal_signal < signal_minimum) {
+  if (clock_gate_disables(template$longitudinal_signal)) {
     return(stats::setNames(rep(0, length(ids)), ids))
   }
   standardized <- apply_biomarker_builder(visits_df, template$biomarker_builder)
@@ -1040,10 +1110,30 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
       seed = if (!is.null(seed)) seed + fold_index else NULL,
       biomarker_kernel = biomarker_kernel
     )
-    predict_registration_shift(fit$template, hold_visits, grid)
+    list(
+      prediction = predict_registration_shift(fit$template, hold_visits, grid),
+      multistart = fit$multistart,
+      fold = fold_index
+    )
   })
 
-  for (prediction in fold_results) {
+  fold_multistart <- do.call(rbind, lapply(fold_results, function(res) {
+    m <- res$multistart
+    if (is.null(m)) return(NULL)
+    data.frame(
+      fold = res$fold,
+      n_starts = m$n_starts,
+      n_successful_starts = m$n_successful_starts,
+      best_start = m$best_start,
+      best_objective = m$best_objective,
+      objective_spread = m$objective_spread,
+      second_best_gap = m$second_best_gap,
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  for (res in fold_results) {
+    prediction <- res$prediction
     row <- match(prediction$id, output$id)
     output$e_hat[row] <- prediction$e_hat
     output$e_clock[row] <- prediction$e_clock
@@ -1068,7 +1158,10 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
       grid = grid,
       biomarker_kernel = final_fit$template$biomarker_builder$kernel,
       characteristic = TRUE,
-      implementation = final_fit$implementation
+      implementation = final_fit$implementation,
+      # Optimization-stability diagnostics promised by the algorithm section.
+      multistart = final_fit$multistart,
+      fold_multistart = fold_multistart
     ),
     class = "silk_registration"
   )

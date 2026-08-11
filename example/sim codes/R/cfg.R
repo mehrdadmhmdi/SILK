@@ -104,6 +104,12 @@ H_X_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HX", unset = "1.50"))
 H_X2_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HX2", unset = "1.00"))
 H_LAG_BANDWIDTH <- as.numeric(Sys.getenv("SILK_HLAG", unset = "0.50"))
 BIOMARKER_BANDWIDTH <- Sys.getenv("SILK_BIOMARKER_BW", unset = "median")
+# Multiplier on the median heuristic. 1 is confirmatory; sweep a prespecified
+# ladder (0.25, 0.5, 1, 2, 4) into a separate output directory to test whether
+# the median rule is on the right scale rather than assuming it is not.
+BIOMARKER_BANDWIDTH_SCALE <- as.numeric(
+  Sys.getenv("SILK_BIOMARKER_BW_SCALE", unset = "1")
+)
 BIOMARKER_KERNELS <- unique(trimws(strsplit(
   Sys.getenv("SILK_BIOMARKER_KERNELS", unset = "gaussian,laplace,matern32"), ","
 )[[1]]))
@@ -132,8 +138,13 @@ TEMPLATE_QUERY_CHUNK <- as.integer(
 )
 N_ALT_ITER_MAX <- as.integer(Sys.getenv("SILK_ALT_ITER", unset = "7"))
 ALT_TOL <- 1e-3
+# Localized profile search. Measured on a pilot (mean_severe, n = 200, m4):
+# removing the localization degraded held-out shift RMSE from 2.13 to 8.62 and
+# the correlation with the true shift from 0.92 to 0.11, so the restriction is
+# part of the estimator and must be disclosed in the manuscript rather than
+# removed. Set SILK_PROFILE_SEARCH_RADIUS=Inf for the sensitivity arm.
 ALT_LOCAL_RADIUS <- as.numeric(Sys.getenv("SILK_ALT_LOCAL_RADIUS", unset = "2.0"))
-N_STARTS <- as.integer(Sys.getenv("SILK_N_STARTS", unset = "1"))
+N_STARTS <- as.integer(Sys.getenv("SILK_N_STARTS", unset = "3"))
 RANDOM_START_SD <- 0.75
 N_FOLDS <- as.integer(Sys.getenv("SILK_N_FOLDS", unset = "5"))
 ANCHOR_MODE <- Sys.getenv("SILK_ANCHOR_MODE", unset = "rx") # "intercept" or "rx"
@@ -159,9 +170,28 @@ KERNEL_METHODS <- c(
   matern32 = "SILK-Matern32"
 )
 ACTIVE_KERNEL_METHODS <- unname(KERNEL_METHODS[BIOMARKER_KERNELS])
-INCLUDE_HISTORY_ABLATION <- identical(
-  tolower(Sys.getenv("SILK_INCLUDE_HISTORY_ABLATION", unset = "false")), "true"
+
+# The paper's calibrated estimand conditions on the calibrated landmark age AND
+# the shift-invariant history. The three methods sharing that feature map --
+# Cox-History-Recorded, SILK-History, Oracle-History-Latent-Age -- are therefore
+# part of the primary roster, not an ablation. Set SILK_PAPER_FEATURE_MAP=false
+# to reproduce the 8.9.2026 roster, which omitted them.
+INCLUDE_PAPER_FEATURE_MAP <- !identical(
+  tolower(Sys.getenv("SILK_PAPER_FEATURE_MAP", unset = "true")), "false"
 )
+# Legacy alias retained so old job scripts still resolve.
+INCLUDE_HISTORY_ABLATION <- INCLUDE_PAPER_FEATURE_MAP
+
+# Primary SILK variants: residual-time Cox on the paper feature map, one per
+# characteristic kernel. Kernel sensitivity must vary ONLY the kernel, so all
+# three share this survival layer, feature map, folds, and seeds.
+PAPER_KERNEL_METHODS <- c(
+  gaussian = "SILK-History",
+  laplace = "SILK-History-Laplace",
+  matern32 = "SILK-History-Matern32"
+)
+ACTIVE_PAPER_KERNEL_METHODS <- unname(PAPER_KERNEL_METHODS[BIOMARKER_KERNELS])
+
 METHODS <- c(
   "Landmark-Recorded",
   "Cox-SameFeature-Recorded",
@@ -176,12 +206,57 @@ METHODS <- c(
   "Beran-Oracle-Latent-Age",
   "Oracle-Latent-Age"
 )
-if (INCLUDE_HISTORY_ABLATION) {
-  METHODS <- c(METHODS, "Cox-History-Recorded", "SILK-History")
+if (INCLUDE_PAPER_FEATURE_MAP) {
+  METHODS <- c(
+    METHODS,
+    "Cox-History-Recorded",
+    ACTIVE_PAPER_KERNEL_METHODS,
+    "Oracle-History-Latent-Age"
+  )
 }
+
+# Prespecified analysis roles. The reporting script must not infer these.
+PRIMARY_SILK_METHOD <- "SILK-History"
+PRIMARY_TRIPLE <- c(
+  recorded = "Cox-History-Recorded",
+  silk = PRIMARY_SILK_METHOD,
+  oracle = "Oracle-History-Latent-Age"
+)
+SUPPLEMENTARY_CLOCK_ISOLATION_TRIPLE <- c(
+  recorded = "Cox-SameFeature-Recorded",
+  silk = "SILK",
+  oracle = "Oracle-Latent-Age"
+)
+# Complete feasible procedures a practitioner could run. Prespecified, so the
+# leaderboard cannot silently absorb ablations or oracle bounds.
+PRIMARY_COMPETITORS <- c(
+  "Cox-History-Recorded",
+  "Landmark-Recorded",
+  "MMLM-Recorded",
+  "JM-Recorded",
+  "RSF-Observed",
+  "DeepSurv-Observed",
+  "TimeError-Integrated-Landmark"
+)
+SILK_FAMILY_METHODS <- c(
+  ACTIVE_KERNEL_METHODS, ACTIVE_PAPER_KERNEL_METHODS, "Beran-SILK"
+)
+ORACLE_METHODS <- c(
+  "Oracle-Latent-Age", "Beran-Oracle-Latent-Age", "Oracle-History-Latent-Age"
+)
 METHOD_ORDER <- METHODS
 
 SURVIVAL_HISTORY_BIOMARKERS <- as.integer(Sys.getenv("SILK_SURV_HIST_B", unset = "3"))
+# Which invariant-history summary enters the fixed feature map g. "default"
+# reproduces the frozen behaviour; "distributional" adds per-biomarker
+# dispersion and pooled shape, which is what the dist_* scenarios actually
+# encode. The confirmatory value is fixed in locked_confirmatory_config.sh.
+SURVIVAL_FEATURE_MAP <- tolower(trimws(
+  Sys.getenv("SILK_FEATURE_MAP", unset = "default")
+))
+if (!SURVIVAL_FEATURE_MAP %in% c("minimal", "default", "distributional")) {
+  stop("SILK_FEATURE_MAP must be minimal, default, or distributional.", call. = FALSE)
+}
 SURVIVAL_HISTORY_KEEP <- c("X1", "X2")
 TIMEERROR_N_IMPUTE <- as.integer(Sys.getenv("SILK_TIMEERROR_N_IMPUTE", unset = "5"))
 TIMEERROR_SD <- as.numeric(Sys.getenv("SILK_TIMEERROR_SD", unset = "1.5"))
@@ -191,6 +266,14 @@ JMBAYES_N_CHAINS <- as.integer(Sys.getenv("SILK_JMBAYES_N_CHAINS", unset = "1"))
 JMBAYES_N_ITER <- as.integer(Sys.getenv("SILK_JMBAYES_N_ITER", unset = "1000"))
 JMBAYES_N_BURNIN <- as.integer(Sys.getenv("SILK_JMBAYES_N_BURNIN", unset = "500"))
 JMBAYES_PRED_N_SAMPLES <- as.integer(Sys.getenv("SILK_JMBAYES_PRED_N_SAMPLES", unset = "200"))
+JMBAYES_LANDMARK_TIME <- as.numeric(Sys.getenv("SILK_JMBAYES_LANDMARK_TIME", unset = "10"))
+if (!is.finite(JMBAYES_LANDMARK_TIME) ||
+    JMBAYES_LANDMARK_TIME <= max(unlist(VISIT_SCHEDULES, use.names = FALSE))) {
+  stop(
+    "SILK_JMBAYES_LANDMARK_TIME must be finite and exceed the longest pre-landmark visit lag.",
+    call. = FALSE
+  )
+}
 OBSERVED_ML_USE_CURRENT_BIOMARKER <- identical(tolower(Sys.getenv("SILK_OBSERVED_ML_USE_CURRENT_BIOMARKER", unset = "true")), "true")
 RSF_NUM_TREES <- as.integer(Sys.getenv("SILK_RSF_NUM_TREES", unset = "300"))
 RSF_MIN_NODE_SIZE <- as.integer(Sys.getenv("SILK_RSF_MIN_NODE_SIZE", unset = "15"))
@@ -267,17 +350,22 @@ SCENARIO_LABELS <- c(
 # Canonical architecture display names (registration x survival layer).
 METHOD_LABELS <- c(
   "Landmark-Recorded" = "Landmark-Recorded",
-  "Cox-SameFeature-Recorded" = "Recorded-Cox",
+  "Cox-SameFeature-Recorded" = "Recorded clock-isolation (suppl.)",
   "MMLM-Recorded" = "MMLM-Recorded",
   "JM-Recorded" = "JM-Recorded",
   "RSF-Observed" = "RSF-Observed",
   "DeepSurv-Observed" = "DeepSurv-Observed",
   "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
-  "SILK" = "SILK-Cox (Gaussian)",
-  "SILK-Laplace" = "SILK-Cox (Laplace)",
-  "SILK-Matern32" = "SILK-Cox (Matern-3/2)",
-  "Cox-History-Recorded" = "Recorded-Cox + history (suppl.)",
-  "SILK-History" = "SILK-Cox + history (suppl.)",
+  # Supplementary clock-isolation arm: attained-age Cox, covariates (X1, X2).
+  "SILK" = "SILK clock-isolation (Gaussian, suppl.)",
+  "SILK-Laplace" = "SILK clock-isolation (Laplace, suppl.)",
+  "SILK-Matern32" = "SILK clock-isolation (Matern-3/2, suppl.)",
+  # Primary arm: residual-time Cox on g(age coordinate, invariant history).
+  "Cox-History-Recorded" = "Recorded-Cox",
+  "SILK-History" = "SILK-Cox (Gaussian)",
+  "SILK-History-Laplace" = "SILK-Cox (Laplace)",
+  "SILK-History-Matern32" = "SILK-Cox (Matern-3/2)",
+  "Oracle-History-Latent-Age" = "Oracle-Cox",
   "Beran-Recorded" = "Recorded-Beran",
   "Beran-SILK" = "SILK-Beran",
   "Beran-Oracle-Latent-Age" = "Oracle-Beran",
@@ -360,6 +448,7 @@ silk_options(
   DEFAULT_SHIFT_GRID_MAX = DEFAULT_SHIFT_GRID_MAX,
   BIOMARKER_KERNEL = "gaussian",
   BIOMARKER_BANDWIDTH = BIOMARKER_BANDWIDTH,
+  BIOMARKER_BANDWIDTH_SCALE = BIOMARKER_BANDWIDTH_SCALE,
   BIOMARKER_BANDWIDTH_MAX_POINTS = BIOMARKER_BANDWIDTH_MAX_POINTS,
   TEMPLATE_INPUT_FEATURES = TEMPLATE_INPUT_FEATURES,
   TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "lag"),
@@ -386,6 +475,7 @@ silk_options(
   METHODS = METHODS,
   METHOD_ORDER = METHOD_ORDER,
   SURVIVAL_HISTORY_BIOMARKERS = SURVIVAL_HISTORY_BIOMARKERS,
+  SURVIVAL_FEATURE_MAP = SURVIVAL_FEATURE_MAP,
   SURVIVAL_HISTORY_KEEP = SURVIVAL_HISTORY_KEEP,
   SCENARIOS = SCENARIOS,
   SCENARIO_LABELS = SCENARIO_LABELS,

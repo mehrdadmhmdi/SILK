@@ -80,6 +80,9 @@ silk_default_options <- function() {
     # map is used.
     BIOMARKER_KERNEL = "gaussian",
     BIOMARKER_BANDWIDTH = "median",
+    # Multiplier on the median heuristic. 1 is the confirmatory default; a
+    # prespecified ladder (e.g. 0.25, 0.5, 1, 2, 4) is a sensitivity arm only.
+    BIOMARKER_BANDWIDTH_SCALE = 1,
     BIOMARKER_BANDWIDTH_MAX_POINTS = 500L,
 
     # A fixed Fourier map defines the scalar template-input kernel only. It is
@@ -96,16 +99,41 @@ silk_default_options <- function() {
     H_LAG_BANDWIDTH = 0.50,
     N_ALT_ITER_MAX = 7L,
     ALT_TOL = 1e-3,
+    # Trust region for the alternating shift update, in years.
+    #
+    # MEASURED, do not "relax" this without rerunning the ladder. Removing the
+    # trust region degrades registration badly: on mean_severe, n = 200, m4,
+    # seed 1, held-out shift RMSE went 2.13 -> 8.62 and the correlation with the
+    # true shift went 0.92 -> 0.11 when both this and PROFILE_SEARCH_RADIUS were
+    # set to Inf. The estimated shift SD also inflated past the truth (7.45 vs
+    # 5.17), i.e. the unrestricted profile wanders rather than being capped.
+    # The localization is therefore part of the estimator, not a shortcut.
     ALT_LOCAL_RADIUS = 2.0,
-    # Deterministic biomarker-clock initialization is the confirmatory default.
-    # Extra zero/random starts are optional algorithmic sensitivities.
-    N_STARTS = 1L,
+    # The paper's algorithm section promises several starts and the spread of
+    # attained objectives across them, and fit_registration_multistart() now
+    # records that spread. Costs roughly linearly: 3 starts took 60.8 s versus
+    # 20.4 s for 1 in the same pilot cell, with no accuracy gain there. Size the
+    # cluster job from a pilot, or set N_STARTS = 1 and amend the manuscript.
+    N_STARTS = 3L,
     RANDOM_START_SD = 0.75,
     N_FOLDS = 5L,
     ANCHOR_MODE = "rx",
     PROFILE_TEMPERATURE = 0.015,
     PROFILE_LOCAL_RADIUS = 0.8,
+    # Held-out shift selection is LOCALIZED to this many years around the
+    # biomarker-clock initializer.
+    #
+    # This is a substantive part of the estimator and must be disclosed in the
+    # manuscript, which currently describes minimization over the whole
+    # candidate set. Measured on mean_severe, n = 200, m4, seed 1:
+    #   radius 2.0 (this default)  shift RMSE 2.13, correlation 0.92
+    #   radius Inf                 shift RMSE 5.99, correlation 0.30
+    # The global profile minimum is therefore NOT the good estimator here; the
+    # localization supplies identification the criterion alone does not.
+    # Set to Inf only to reproduce that sensitivity arm.
     PROFILE_SEARCH_RADIUS = 2.0,
+    # Gate on the longitudinal-signal diagnostic. The diagnostic returns NA when
+    # the visit design makes it undefined; NA never disables the clock.
     CLOCK_SIGNAL_MIN = 0.10,
 
     # Parallelism for the cross-fitted registration folds. Default "auto" uses

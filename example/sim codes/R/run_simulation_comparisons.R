@@ -49,6 +49,8 @@ registration_kernel_for_method <- function(method) {
     "SILK-Laplace" = "laplace",
     "SILK-Matern32" = "matern32",
     "SILK-History" = "gaussian",
+    "SILK-History-Laplace" = "laplace",
+    "SILK-History-Matern32" = "matern32",
     "Beran-SILK" = "gaussian",
     NA_character_
   )
@@ -97,8 +99,20 @@ fit_one_prediction_method <- function(method, train, cell, seed_base,
     "Cox-History-Recorded" = fit_recorded_history_ablation(
       train$subjects, train$visits
     ),
+    "Oracle-History-Latent-Age" = fit_oracle_history_latent_age(
+      train$subjects, train$visits
+    ),
     "SILK-History" = fit_silk_history_ablation(
-      train$subjects, train$visits, require_shared_registration("gaussian")
+      train$subjects, train$visits, require_shared_registration("gaussian"),
+      method = "SILK-History"
+    ),
+    "SILK-History-Laplace" = fit_silk_history_ablation(
+      train$subjects, train$visits, require_shared_registration("laplace"),
+      method = "SILK-History-Laplace"
+    ),
+    "SILK-History-Matern32" = fit_silk_history_ablation(
+      train$subjects, train$visits, require_shared_registration("matern32"),
+      method = "SILK-History-Matern32"
     ),
     "Beran-Recorded" = fit_beran_recorded(train$subjects),
     "Beran-SILK" = fit_beran_silk(
@@ -136,7 +150,16 @@ predict_one_prediction_method <- function(method, fit, test, cell, horizons = PR
     "Cox-History-Recorded" = do.call(
       predict_recorded_history_ablation, c(list(fit, test$subjects, test$visits), args)
     ),
+    "Oracle-History-Latent-Age" = do.call(
+      predict_oracle_history_latent_age, c(list(fit, test$subjects, test$visits), args)
+    ),
     "SILK-History" = do.call(
+      predict_silk_history_ablation, c(list(fit, test$subjects, test$visits), args)
+    ),
+    "SILK-History-Laplace" = do.call(
+      predict_silk_history_ablation, c(list(fit, test$subjects, test$visits), args)
+    ),
+    "SILK-History-Matern32" = do.call(
       predict_silk_history_ablation, c(list(fit, test$subjects, test$visits), args)
     ),
     "Beran-Recorded" = do.call(predict_beran_recorded, c(list(fit, test$subjects), args)),
@@ -330,6 +353,21 @@ registration_metric_row <- function(registration, subjects, visits, cell,
   recorded_rmse <- sqrt(mean((subjects$A_obs[finite] - stage_true[finite])^2))
   stage_rmse <- sqrt(mean((stage_hat[finite] - stage_true[finite])^2))
   builder <- registration$final_template$biomarker_builder
+
+  # Optimization-stability diagnostics. ms is the full-training-set multistart;
+  # fold_ms summarizes the cross-fitting folds that actually produced the
+  # cross-fitted calibrated states used by the survival layer.
+  ms <- registration$multistart
+  if (is.null(ms)) ms <- list()
+  ms_value <- function(name, default = NA_real_) {
+    z <- ms[[name]]
+    if (is.null(z) || !length(z)) default else z[[1L]]
+  }
+  fold_ms <- registration$fold_multistart
+  fold_mean <- function(name) {
+    if (is.null(fold_ms) || !nrow(fold_ms) || !name %in% names(fold_ms)) return(NA_real_)
+    mean(as.numeric(fold_ms[[name]]), na.rm = TRUE)
+  }
   data.frame(
     task_id = cell$task_id,
     phase = cell$phase,
@@ -363,6 +401,17 @@ registration_metric_row <- function(registration, subjects, visits, cell,
     mean_estimated_shift = mean(e_hat[finite]),
     shift_x1_correlation = safe_cor(e_hat, subjects$X1),
     n_evaluated = sum(finite),
+    n_starts = ms_value("n_starts"),
+    n_successful_starts = ms_value("n_successful_starts"),
+    best_start = ms_value("best_start", NA_character_),
+    best_objective = ms_value("best_objective"),
+    objective_spread = ms_value("objective_spread"),
+    second_best_gap = ms_value("second_best_gap"),
+    start_names = ms_value("start_names", NA_character_),
+    start_objective_values = ms_value("start_objective_values", NA_character_),
+    fold_mean_successful_starts = fold_mean("n_successful_starts"),
+    fold_mean_objective_spread = fold_mean("objective_spread"),
+    fold_mean_second_best_gap = fold_mean("second_best_gap"),
     stringsAsFactors = FALSE
   )
 }

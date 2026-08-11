@@ -351,25 +351,129 @@ observed_profile_covariates <- function(subjects, visits = NULL,
   cbind(landmark_age = subjects$A_obs, base_covariates(subjects))
 }
 
-history_ablation_covariates <- function(subjects, visits) {
+# Distributional summaries of the biomarker history. In the dist_* scenarios the
+# stage signal lives in the SHAPE of the biomarker distribution (mean and
+# variance are held fixed by construction), so a feature map limited to current
+# values plus mean_B/sd_B discards exactly what the characteristic kernel is
+# meant to exploit. These add per-biomarker dispersion and pooled shape.
+distributional_history_features <- function(subjects, visits) {
+  bcols <- bio_columns(visits)
+  ids <- subjects$id
+  out <- data.frame(id = ids, stringsAsFactors = FALSE)
+  keep_b <- bcols[seq_len(min(length(bcols), SURVIVAL_HISTORY_BIOMARKERS))]
+
+  per_sd <- matrix(0, nrow = length(ids), ncol = length(keep_b),
+                   dimnames = list(NULL, paste0("sd_", keep_b)))
+  per_rng <- matrix(0, nrow = length(ids), ncol = length(keep_b),
+                    dimnames = list(NULL, paste0("range_", keep_b)))
+  pooled <- matrix(0, nrow = length(ids), ncol = 5L,
+                   dimnames = list(NULL, c("q10_B", "q25_B", "q75_B", "q90_B", "skew_B")))
+
+  split_idx <- split(seq_len(nrow(visits)), visits$id)
+  for (k in seq_along(ids)) {
+    rows <- split_idx[[as.character(ids[k])]]
+    if (is.null(rows) || !length(rows)) next
+    sv <- visits[rows, , drop = FALSE]
+    for (j in seq_along(keep_b)) {
+      z <- as.numeric(sv[[keep_b[j]]])
+      z <- z[is.finite(z)]
+      if (length(z) >= 2L) {
+        per_sd[k, j] <- stats::sd(z)
+        per_rng[k, j] <- diff(range(z))
+      }
+    }
+    zz <- as.numeric(as.matrix(sv[, bcols, drop = FALSE]))
+    zz <- zz[is.finite(zz)]
+    if (length(zz) >= 3L) {
+      pooled[k, 1:4] <- stats::quantile(zz, c(0.10, 0.25, 0.75, 0.90), names = FALSE)
+      s <- stats::sd(zz)
+      pooled[k, 5L] <- if (s > 1e-10) mean(((zz - mean(zz)) / s)^3) else 0
+    }
+  }
+  cbind(out, per_sd, per_rng, pooled)
+}
+
+# Feature map variants for g. "default" reproduces the frozen behaviour exactly.
+# Selected by SILK_FEATURE_MAP / silk option SURVIVAL_FEATURE_MAP so the tuning
+# sweep and the confirmatory run share one definition.
+survival_feature_map_name <- function() {
+  z <- Sys.getenv("SILK_FEATURE_MAP", unset = "")
+  if (!nzchar(z)) {
+    opt <- tryCatch(silk_opt("SURVIVAL_FEATURE_MAP"), error = function(e) NULL)
+    z <- if (is.null(opt) || !length(opt)) "default" else as.character(opt)[1L]
+  }
+  z <- tolower(trimws(z))
+  if (!z %in% c("minimal", "default", "distributional")) {
+    stop("SILK_FEATURE_MAP must be minimal, default, or distributional.", call. = FALSE)
+  }
+  z
+}
+
+history_ablation_covariates <- function(subjects, visits,
+                                        variant = survival_feature_map_name()) {
   history <- make_history_features(subjects, visits)
   history <- history[match(subjects$id, history$id), , drop = FALSE]
   current_names <- intersect(
     paste0("current_B", seq_len(SURVIVAL_HISTORY_BIOMARKERS)), names(history)
   )
-  keep <- intersect(
-    c("X1", "X2", current_names, "mean_B", "sd_B", "visit_count", "span"),
-    names(history)
+  keep <- switch(
+    variant,
+    minimal = c("X1", "X2", current_names),
+    default = c("X1", "X2", current_names, "mean_B", "sd_B", "visit_count", "span"),
+    distributional = c("X1", "X2", current_names, "mean_B", "sd_B",
+                       "visit_count", "span")
   )
-  as.matrix(history[, keep, drop = FALSE])
+  keep <- intersect(keep, names(history))
+  x <- as.matrix(history[, keep, drop = FALSE])
+
+  if (identical(variant, "distributional")) {
+    extra <- distributional_history_features(subjects, visits)
+    extra <- extra[match(subjects$id, extra$id), setdiff(names(extra), "id"), drop = FALSE]
+    x <- cbind(x, as.matrix(extra))
+  }
+  x[!is.finite(x)] <- 0
+  x
+}
+
+# -----------------------------------------------------------------------------
+# PRIMARY: the manuscript's estimator.
+#
+# The paper's survival layer is a Cox model for RESIDUAL time,
+#     lambda_j(u | v_ij) = lambda_0j(u) exp(beta_j' v_ij),  u >= 0,
+# with a fixed feature map v_ij = g(age coordinate, invariant history). The age
+# coordinate is therefore a COVARIATE inside g, not the time axis. See
+# Section "The Residual-Survival Layer": "the recorded-age and calibrated-age
+# Cox models are V^A = g(A_ij, Hbar_ij), Vtilde = g(Atilde_ij, Hbar_ij) ...
+# All biomarker summaries, baseline covariates, interactions, transformations,
+# and tuning choices in g are kept identical across the two models."
+#
+# g is built by paper_feature_map(): the age coordinate, then the shift-
+# invariant history Hbar = (X, current biomarker values, biomarker history
+# summaries, timepoint count, history span).
+#
+# Methods sharing g and differing ONLY in the age coordinate:
+#   Cox-History-Recorded        A_obs
+#   SILK-History{,-Laplace,-Matern32}   cross-fitted calibrated age (per kernel)
+#   Oracle-History-Latent-Age   A_star  (simulation-only bound)
+#
+# NOTE. The attained-age triple (Cox-SameFeature-Recorded, SILK, SILK-Laplace,
+# SILK-Matern32, Oracle-Latent-Age) uses fit_age_scale_cox() and is retained as
+# a SUPPLEMENTARY clock-isolation analysis. It is not the paper's estimator.
+# -----------------------------------------------------------------------------
+
+paper_feature_map <- function(subjects, visits, age_coordinate) {
+  x <- history_ablation_covariates(subjects, visits)
+  out <- cbind(age_coordinate = as.numeric(age_coordinate), x)
+  colnames(out)[1L] <- "age_coordinate"
+  out
 }
 
 fit_recorded_history_ablation <- function(train_subjects, train_visits) {
-  x <- history_ablation_covariates(train_subjects, train_visits)
+  x <- paper_feature_map(train_subjects, train_visits, train_subjects$A_obs)
   list(
     method = "Cox-History-Recorded",
-    fit = fit_age_scale_cox(train_subjects, train_subjects$A_obs, x),
-    implementation = "supplementary attained-age Cox with recorded clock and observed history"
+    fit = fit_residual_cox(train_subjects, x),
+    implementation = "residual-time Cox, paper feature map g(A_obs, invariant history)"
   )
 }
 
@@ -378,27 +482,56 @@ predict_recorded_history_ablation <- function(fit, test_subjects, test_visits,
                                                fold_id = 1L, replicate_id = 1L,
                                                n_train_setting = NA,
                                                time_grid_setting = NA) {
-  x <- history_ablation_covariates(test_subjects, test_visits)
-  risk <- predict_age_scale_cox_risk(fit$fit, test_subjects$A_obs, x, horizons)
+  x <- paper_feature_map(test_subjects, test_visits, test_subjects$A_obs)
+  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
   prediction_frame(
     test_subjects, test_subjects$A_obs, horizons, risk,
     method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
   )
 }
 
-fit_silk_history_ablation <- function(train_subjects, train_visits, registration) {
+fit_oracle_history_latent_age <- function(train_subjects, train_visits) {
+  x <- paper_feature_map(train_subjects, train_visits, train_subjects$A_star)
+  list(
+    method = "Oracle-History-Latent-Age",
+    fit = fit_residual_cox(train_subjects, x),
+    implementation = "residual-time Cox, paper feature map g(A_star, invariant history)"
+  )
+}
+
+predict_oracle_history_latent_age <- function(fit, test_subjects, test_visits,
+                                              horizons = PREDICTION_HORIZONS,
+                                              fold_id = 1L, replicate_id = 1L,
+                                              n_train_setting = NA,
+                                              time_grid_setting = NA) {
+  x <- paper_feature_map(test_subjects, test_visits, test_subjects$A_star)
+  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
+  prediction_frame(
+    test_subjects, test_subjects$A_star, horizons, risk,
+    method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
+  )
+}
+
+# Kernel-parameterised so that Gaussian, Laplace and Matern-3/2 share EXACTLY
+# this survival layer and feature map. Previously only the Gaussian variant had
+# the history map while the other two kept the (X1, X2) attained-age layer, so
+# the "kernel sensitivity" contrast changed the kernel and the Cox model at the
+# same time. The registration object is supplied by the caller from the shared
+# per-kernel registrations, so folds, grid and Monte Carlo seeds are identical.
+fit_silk_history_ablation <- function(train_subjects, train_visits, registration,
+                                      method = "SILK-History") {
   stage <- registration$train_stage$S_hat[
     match(train_subjects$id, registration$train_stage$id)
   ]
-  x <- history_ablation_covariates(train_subjects, train_visits)
+  x <- paper_feature_map(train_subjects, train_visits, stage)
   list(
-    method = "SILK-History",
-    fit = fit_age_scale_cox(train_subjects, stage, x),
+    method = method,
+    fit = fit_residual_cox(train_subjects, x),
     registration = registration,
     grid = registration$grid,
     implementation = paste(
       registration$implementation,
-      "+ supplementary observed-history survival covariates"
+      "+ residual-time Cox, paper feature map g(calibrated age, invariant history)"
     )
   )
 }
@@ -410,8 +543,8 @@ predict_silk_history_ablation <- function(fit, test_subjects, test_visits,
                                            time_grid_setting = NA) {
   shift <- predict_silk_registration(fit$registration, test_visits)
   stage <- test_subjects$A_obs - shift$e_hat[match(test_subjects$id, shift$id)]
-  x <- history_ablation_covariates(test_subjects, test_visits)
-  risk <- predict_age_scale_cox_risk(fit$fit, stage, x, horizons)
+  x <- paper_feature_map(test_subjects, test_visits, stage)
+  risk <- predict_residual_cox_risk(fit$fit, x, horizons)
   prediction_frame(
     test_subjects, stage, horizons, risk,
     method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
