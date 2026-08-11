@@ -47,6 +47,11 @@ sbatch job_confirmatory.sbatch
 
 The confirmatory launcher refuses to run unless validation used the same
 `locked_confirmatory_config.sh` file and the same installed SILK package commit.
+If all validation tasks exist but its collection/reporting job stopped before
+writing the completion marker, the launcher first rebuilds those summaries from
+the existing raw files and proceeds only after that recheck succeeds. Do not
+submit `job_full.sbatch` directly; it is the internal array controller used by
+the two stage-specific launchers.
 All hyperparameters are fixed in that file from a separate development design
 not included in the confirmatory claims; neither launcher tunes against the
 confirmatory outcomes.

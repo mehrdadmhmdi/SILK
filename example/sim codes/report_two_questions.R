@@ -260,10 +260,17 @@ boot_mean_diff <- function(a, b) {
   a <- a[keep]
   b <- b[keep]
   if (!length(a)) return(c(estimate = NA_real_, lower = NA_real_, upper = NA_real_))
+  estimate <- mean(a - b)
+  # A one-replication validation run checks execution only. Resampling its one
+  # value would produce a degenerate interval that is not an uncertainty
+  # estimate, so retain the point estimate and leave both limits undefined.
+  if (length(a) < 2L) {
+    return(c(estimate = estimate, lower = NA_real_, upper = NA_real_))
+  }
   idx <- boot_index(length(a))
   draws <- rowMeans(matrix(a[idx], nrow = nrow(idx)) -
                       matrix(b[idx], nrow = nrow(idx)))
-  c(estimate = mean(a - b),
+  c(estimate = estimate,
     lower = unname(quantile(draws, 0.025)),
     upper = unname(quantile(draws, 0.975)))
 }
@@ -287,8 +294,9 @@ q1_table <- function(map) {
     # the ratio is unstable. `denominator_separated` means "far enough from zero
     # for the ratio to be reported", NOT "mathematically defined".
     recorded_oracle <- boot_mean_diff(rec, orc)
-    separated <- !(recorded_oracle[["lower"]] <= 0 &&
-                     recorded_oracle[["upper"]] >= 0)
+    separated <- is.finite(recorded_oracle[["lower"]]) &&
+      is.finite(recorded_oracle[["upper"]]) &&
+      !(recorded_oracle[["lower"]] <= 0 && recorded_oracle[["upper"]] >= 0)
 
     recorded_silk <- boot_mean_diff(rec, sil)
     silk_oracle <- boot_mean_diff(sil, orc)
@@ -340,10 +348,15 @@ for (nm in names(TRIPLES)) {
   show <- data.frame(
     scenario = tab$scenario,
     silk_minus_oracle_x1e3 = round(tab$silk_minus_oracle_x1e3, 3),
-    paired_ci = sprintf(
-      "[%.3f, %.3f]",
-      tab$silk_minus_oracle_lo_x1e3,
-      tab$silk_minus_oracle_hi_x1e3
+    paired_ci = ifelse(
+      is.finite(tab$silk_minus_oracle_lo_x1e3) &
+        is.finite(tab$silk_minus_oracle_hi_x1e3),
+      sprintf(
+        "[%.3f, %.3f]",
+        tab$silk_minus_oracle_lo_x1e3,
+        tab$silk_minus_oracle_hi_x1e3
+      ),
+      "not estimable (n=1)"
     ),
     recorded_minus_silk_x1e3 = round(tab$recorded_minus_silk_x1e3, 3),
     stringsAsFactors = FALSE
@@ -371,7 +384,9 @@ for (s in scenarios) {
   ref <- g[[PRIMARY_SILK_METHOD]]
   for (m in competitors) {
     d <- boot_mean_diff(g[[m]], ref)
-    status <- if (d[["lower"]] > 0) {
+    status <- if (!is.finite(d[["lower"]]) || !is.finite(d[["upper"]])) {
+      "validation point estimate only"
+    } else if (d[["lower"]] > 0) {
       "SILK win"
     } else if (d[["upper"]] < 0) {
       "SILK loss"
@@ -398,26 +413,47 @@ for (s in scenarios) {
          call. = FALSE)
   }
   ref_best <- g_best[[PRIMARY_SILK_METHOD]]
-  idx <- boot_index(nrow(g_best))
-  M <- vapply(competitors, function(m) g_best[[m]], numeric(nrow(g_best)))
-  draws <- numeric(nrow(idx))
-  picked <- character(nrow(idx))
-  for (b in seq_len(nrow(idx))) {
-    i <- idx[b, ]
-    means <- colMeans(M[i, , drop = FALSE])
-    w <- which.min(means)
-    picked[b] <- competitors[w]
-    draws[b] <- mean(M[i, w] - ref_best[i])
-  }
+  # do.call(cbind, ...) preserves a 1 x p matrix in the validation run; vapply
+  # simplifies to a vector when n_rep=1 and caused the original Q2 crash.
+  M <- do.call(cbind, lapply(competitors, function(m) as.numeric(g_best[[m]])))
+  colnames(M) <- competitors
   observed_best <- competitors[which.min(colMeans(M))]
-  lo <- unname(quantile(draws, 0.025)); hi <- unname(quantile(draws, 0.975))
+
+  if (nrow(g_best) >= 2L) {
+    idx <- boot_index(nrow(g_best))
+    draws <- numeric(nrow(idx))
+    picked <- character(nrow(idx))
+    for (b in seq_len(nrow(idx))) {
+      i <- idx[b, ]
+      means <- colMeans(M[i, , drop = FALSE])
+      w <- which.min(means)
+      picked[b] <- competitors[w]
+      draws[b] <- mean(M[i, w] - ref_best[i])
+    }
+    lo <- unname(quantile(draws, 0.025))
+    hi <- unname(quantile(draws, 0.975))
+    selection_stability <- round(mean(picked == observed_best), 3)
+    selection_ci <- sprintf("[%.3f, %.3f]", 1000 * lo, 1000 * hi)
+    selection_verdict <- if (lo > 0) {
+      "SILK win"
+    } else if (hi < 0) {
+      "SILK loss"
+    } else {
+      "statistical tie"
+    }
+  } else {
+    lo <- hi <- NA_real_
+    selection_stability <- NA_real_
+    selection_ci <- "not estimable (n=1)"
+    selection_verdict <- "validation point estimate only"
+  }
   verdict_rows[[length(verdict_rows) + 1L]] <- data.frame(
     scenario = s,
     best_feasible_competitor = observed_best,
-    selection_stability = round(mean(picked == observed_best), 3),
+    selection_stability = selection_stability,
     delta_x1e3 = round(1000 * mean(M[, observed_best] - ref_best), 3),
-    ci_selection_aware = sprintf("[%.3f, %.3f]", 1000 * lo, 1000 * hi),
-    verdict = if (lo > 0) "SILK win" else if (hi < 0) "SILK loss" else "statistical tie",
+    ci_selection_aware = selection_ci,
+    verdict = selection_verdict,
     stringsAsFactors = FALSE
   )
 }
@@ -425,13 +461,15 @@ q2 <- do.call(rbind, q2_rows)
 verdict <- do.call(rbind, verdict_rows)
 q2_summary <- do.call(rbind, lapply(split(q2, q2$scenario), function(z) {
   losses <- z$method[z$result == "SILK loss"]
+  validation_only <- sum(z$result == "validation point estimate only")
   data.frame(
     scenario = z$scenario[1L],
     n_comparators = nrow(z),
     silk_wins = sum(z$result == "SILK win"),
     statistical_ties = sum(z$result == "statistical tie"),
     silk_losses = length(losses),
-    win_or_tie_against_all = length(losses) == 0L,
+    validation_only = validation_only,
+    win_or_tie_against_all = if (validation_only) NA else length(losses) == 0L,
     losses_to = if (length(losses)) paste(losses, collapse = "; ") else "",
     stringsAsFactors = FALSE
   )
