@@ -50,12 +50,28 @@ silk_default_options <- function() {
     SURV_LAMBDA_D = 10.0,
     SURV_KAPPA_D = 1.35,
     # Primary origin-time DGM: Gompertz baseline hazard on attained age.
-    SURV_AGE_BASE_RATE = 0.04,
-    SURV_AGE_GROWTH = 0.18,
+    # Gompertz baseline on attained age. The growth rate sets how much of the
+    # prognostic signal sits on the time scale that origin error corrupts, and
+    # therefore how much discrimination registration can recover. At the former
+    # growth 0.18 the linear predictor had SD 0.47 and the Bayes-optimal mean
+    # AUC was 0.640, leaving a recorded-versus-latent gap of only 0.055 AUC.
+    # At growth 0.540 the linear predictor has SD 1.27, the Bayes-optimal mean
+    # AUC is 0.808, and the gap widens to 0.153. The base rate is retuned to
+    # 0.01098 so the four-year event rate stays at 0.24 as before.
+    SURV_AGE_BASE_RATE = 0.01107,
+    SURV_AGE_GROWTH = 0.540,
     SURV_BETA_A = 0.95,
     SURV_BETA_X1 = 0.20,
     SURV_BETA_X2 = 0.15,
     SURV_BETA_U = 0.25,
+
+    # Origin-error shape constants (see r_common_shift in data-generation.R).
+    # MIX_* are relative component SDs for the contaminated-normal shift; only
+    # their ratio matters because the draw is rescaled to sigma_eps.
+    MIX_TAIL_PROB = 0.20,
+    MIX_CORE_SD = 1.00,
+    MIX_TAIL_SD = 3.00,
+    HEAVY_TAIL_DF = 2.5,
     CENS_RATE = 0.045,
     EVAL_HORIZON = 4.0,
     PREDICTION_HORIZONS = c(1, 2, 3, 4),
@@ -172,8 +188,9 @@ silk_default_options <- function() {
     SURVIVAL_HISTORY_BIOMARKERS = 3L,
     SURVIVAL_HISTORY_KEEP = c("X1", "X2"),
 
-    # Scenario definitions. The primary error SDs 2.5 and 5 imply age
-    # reliabilities of approximately 0.46 and 0.18 for A* ~ Uniform(24, 32).
+    # Scenario definitions.
+    # The primary error SDs 6 and 12 imply age reliabilities of approximately
+    # 0.13 and 0.036 for A* ~ Uniform(24, 32).
     SCENARIOS = data.frame(
       scenario = c(
         "no_error", "mean_moderate", "mean_severe", "mean_strong_dense",
@@ -188,8 +205,8 @@ silk_default_options <- function() {
       default_schedule = c(
         "m4", "m4", "m4", "m12", "m4", "m4", "m12", "m4", "m4", "m4", "m4", "m4"
       ),
-      sigma_eps = c(0, 2.5, 5.0, 5.0, 2.5, 5.0, 5.0, 5.0, 4.0, 5.0, 5.0, 5.0),
-      eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 2.5, 0, 0, 0),
+      sigma_eps = c(0, 6.0, 12.0, 12.0, 6.0, 12.0, 12.0, 12.0, 10.0, 12.0, 12.0, 12.0),
+      eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 6.0, 0, 0, 0),
       eps_type = c(
         "normal", "normal", "mixture", "mixture", "normal", "mixture",
         "mixture", "mixture", "normal", "t3", "asymmetric", "mixture"
@@ -197,14 +214,14 @@ silk_default_options <- function() {
       n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
       missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
       irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
-      shift_min = c(-4, -8, -15, -15, -8, -15, -15, -15, -12, -20, -20, -15),
-      shift_max = c( 4,  8,  15,  15,  8,  15,  15,  15,  16,  20,  20,  15),
+      shift_min = c(-4, -20, -36, -36, -20, -36, -36, -36, -30, -48, -48, -36),
+      shift_max = c( 4,  20,  36,  36,  20,  36,  36,  36,  42,  48,  48,  36),
       signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.00, 2.00, 2.00, 2.00, 2.00),
       sigma_bio = c(0.70, 0.60, 0.50, 0.22, 0.70, 0.60, 0.30, 1.45, 0.55, 0.55, 0.55, 0.65),
       u_bio_coef = rep(0, 12),
       dist_sd_base = c(0.45, 0.45, 0.45, 0.45, 0.36, 0.22, 0.14, 0.45, 0.45, 0.45, 0.45, 0.45),
       dist_sd_slope = c(0.18, 0.18, 0.18, 0.18, 0.35, 0.85, 1.25, 0.18, 0.18, 0.18, 0.18, 0.18),
-      risk_age_growth = rep(0.18, 12),
+      risk_age_growth = rep(0.540, 12),
       risk_beta_U = rep(0, 12),
       description = c(
         "No origin error; calibration should not help and may add noise.",

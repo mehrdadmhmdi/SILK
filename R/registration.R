@@ -1050,12 +1050,27 @@ predict_registration_shift <- function(template, visits_df, grid) {
     as.numeric(clock_shift[match(ids, names(clock_shift))]), min(grid)
   ), max(grid))
   search_radius <- as.numeric(silk_opt("PROFILE_SEARCH_RADIUS"))[1L]
+  # `allowed` is the candidate set the selection actually searches. When the
+  # trust region binds it is a strict subset of the grid, and the EFFECTIVE
+  # boundary is the edge of that subset, not grid position 1 or length(grid).
+  allowed <- matrix(TRUE, nrow = length(ids), ncol = length(grid))
   if (is.finite(search_radius) && search_radius > 0) {
-    outside <- abs(outer(clock_center, grid, "-")) >
-      search_radius + 1e-12
-    selection_loss[outside] <- Inf
+    allowed <- abs(outer(clock_center, grid, "-")) <= search_radius + 1e-12
+    # A row whose trust region falls entirely off-grid would have no candidate;
+    # fall back to the whole grid so selection stays well defined.
+    empty <- rowSums(allowed) == 0L
+    if (any(empty)) allowed[empty, ] <- TRUE
+    selection_loss[!allowed] <- Inf
   }
   best <- max.col(-selection_loss, ties.method = "first")
+  # Flag selections pinned to the edge of the searched window. Reporting the
+  # nominal grid edge instead made a pile-up at the trust-region boundary
+  # invisible: on MACS this statistic read 0.0% while 41.3% of held-out shifts
+  # sat exactly on the +/-2 window edge.
+  first_allowed <- max.col(allowed, ties.method = "first")
+  last_allowed <- ncol(allowed) + 1L - max.col(allowed[, ncol(allowed):1L, drop = FALSE],
+                                               ties.method = "first")
+  at_window_edge <- best == first_allowed | best == last_allowed
   refined <- vapply(
     seq_along(ids), function(index) refine_profile_min(selection_loss[index, ], grid),
     numeric(1)
@@ -1066,7 +1081,9 @@ predict_registration_shift <- function(template, visits_df, grid) {
     e_clock = clock_center,
     e_hat_grid = grid[best],
     min_loss = loss[cbind(seq_along(ids), best)],
-    at_boundary = best %in% c(1L, length(grid)),
+    at_boundary = at_window_edge,
+    at_grid_edge = best == 1L | best == length(grid),
+    clock_gate_disabled = clock_gate_disables(template$longitudinal_signal),
     gap_q1 = vapply(seq_along(ids), function(index) {
       far <- abs(grid - grid[best[index]]) >= 1
       if (!any(far)) return(NA_real_)
@@ -1095,7 +1112,8 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
   fold <- sample(rep(seq_len(number_folds), length.out = number_ids))
   output <- data.frame(
     id = ids, e_hat = NA_real_, e_clock = NA_real_, S_hat = NA_real_, fold = fold,
-    at_boundary = NA, gap_q1 = NA_real_, gap_q2 = NA_real_,
+    at_boundary = NA, at_grid_edge = NA, clock_gate_disabled = NA,
+    gap_q1 = NA_real_, gap_q2 = NA_real_,
     stringsAsFactors = FALSE
   )
 
@@ -1138,6 +1156,8 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
     output$e_hat[row] <- prediction$e_hat
     output$e_clock[row] <- prediction$e_clock
     output$at_boundary[row] <- prediction$at_boundary
+    output$at_grid_edge[row] <- prediction$at_grid_edge
+    output$clock_gate_disabled[row] <- prediction$clock_gate_disabled
     output$gap_q1[row] <- prediction$gap_q1
     output$gap_q2[row] <- prediction$gap_q2
   }

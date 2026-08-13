@@ -12,9 +12,19 @@ r_common_shift <- function(n, sigma_eps, eps_mean = 0, eps_type = "normal") {
   if (eps_type == "normal") {
     eps_mean + stats::rnorm(n, sd = sigma_eps)
   } else if (eps_type == "mixture") {
-    tail_prob <- 0.20
-    core_sd <- 0.35
-    tail_sd <- 6.00
+    # Contaminated normal. The component SDs are specified RELATIVE to each
+    # other and the draw is then rescaled to marginal SD sigma_eps, so what
+    # matters is the ratio tail_sd / core_sd, not their absolute values.
+    # A large ratio concentrates almost all mass at a near-zero shift: with the
+    # former (core 0.35, tail 6.00) the rescaled core SD was only
+    # 0.35 * sigma_eps / 2.70 = 0.65 years at sigma_eps = 5, leaving 80% of
+    # subjects with an essentially correct clock and P(|eps| < 1) = 72%.
+    # The current values give a rescaled core SD of 3.10 and tail SD of 9.30 at
+    # sigma_eps = 5, i.e. a genuine common shift for every subject with a
+    # threefold-worse contaminating component.
+    tail_prob <- as.numeric(silk_opt("MIX_TAIL_PROB"))[1L]
+    core_sd <- as.numeric(silk_opt("MIX_CORE_SD"))[1L]
+    tail_sd <- as.numeric(silk_opt("MIX_TAIL_SD"))[1L]
     is_tail <- stats::rbinom(n, size = 1L, prob = tail_prob)
     z <- stats::rnorm(n, sd = ifelse(is_tail == 1L, tail_sd, core_sd))
     mix_sd <- sqrt((1 - tail_prob) * core_sd^2 + tail_prob * tail_sd^2)
@@ -23,8 +33,17 @@ r_common_shift <- function(n, sigma_eps, eps_mean = 0, eps_type = "normal") {
     z <- (stats::rexp(n) - stats::rexp(n)) / sqrt(2)
     eps_mean + z * sigma_eps
   } else if (eps_type == "t3") {
-    df <- 2.5
-    eps_mean + stats::rt(n, df = df) / sqrt(df / (df - 2)) * sigma_eps
+    # Heavy-tailed origin error. Standardising a t to marginal SD sigma_eps
+    # inflates the interquartile range and therefore produces a WIDER bulk and
+    # only modestly heavier tails than N(0, sigma_eps) -- the opposite of the
+    # intended contrast. Matching the interquartile range instead keeps the
+    # bulk comparable to N(0, sigma_eps) while leaving genuinely heavy tails:
+    # at sigma_eps = 5, P(|eps| > 15) rises from 0.3% under the normal to 5.2%.
+    # Note that sigma_eps is then a normal-equivalent scale, not the marginal
+    # SD, which is not finite in a useful sense for a t with df = 2.5.
+    df <- as.numeric(silk_opt("HEAVY_TAIL_DF"))[1L]
+    scale_iqr <- sigma_eps / (stats::qt(0.75, df) / stats::qnorm(0.75))
+    eps_mean + stats::rt(n, df = df) * scale_iqr
   } else if (eps_type == "asymmetric") {
     z <- stats::rchisq(n, df = 1) - 1
     eps_mean + z / stats::sd(z) * sigma_eps
@@ -83,12 +102,36 @@ marker_mean_matrix <- function(age, X1, X2, U, p, sc) {
   amp <- sc_val(sc, "signal_amp", if (signal == "weak") 0.12 else DEFAULT_SIGNAL_AMP)
   ucoef <- sc_val(sc, "u_bio_coef", DEFAULT_U_BIO_COEF)
 
+  # Template channels. These must identify a common shift over the WHOLE
+  # candidate grid, which is roughly +/-3 sigma_eps and therefore +/-36 at the
+  # severe setting. Two earlier channels violated that:
+  #
+  #   1.5 * sin((age - 24) * pi / 8)   period 16
+  #   1.2 * cos((age - 25) * pi / 7)   period 14
+  #
+  # nearly re-align at a 15-year shift, so with four biomarkers the population
+  # discrepancy || g(a) - g(a + d) ||^2 had local minima at d = -15.0 (22% of
+  # the maximum loss), -30.4, +14.8 and +30.2 in addition to the truth at 0.
+  # This was harmless while the grid stopped at +/-15 -- the competing basin sat
+  # exactly on the boundary -- but at +/-36 every subject has four basins.
+  # The tanh channels saturate beyond about +/-7 and cannot break the tie.
+  #
+  # The fifth channel, 0.35 * (age - 28)^2 - 2, was symmetric about the age
+  # center and carried SD 9.95 against roughly 1.2 for every other channel, so
+  # in the scenarios that include it registration was driven by that one
+  # channel alone.
+  #
+  # Replacements: staggered saturating channels at different centers and widths
+  # for g3/g4, and a monotone cubic on a comparable scale for g5. The
+  # discrepancy is then strictly increasing in |d| over +/-36 with no spurious
+  # minima, and near-zero discrimination improves (normalised loss at |d| = 1
+  # goes from 0.022 to 0.014).
   base_list <- list(
     2.2 * tanh(z),
     -1.8 * tanh((age - 29) / 2.0),
-    1.5 * sin((age - 24) * pi / 8),
-    1.2 * cos((age - 25) * pi / 7),
-    0.35 * (age - A_STAR_CENTER)^2 - 2.0
+    1.5 * tanh((age - 25) / 4.0),
+    -1.2 * tanh((age - 31) / 3.0),
+    1.4 * ((age - A_STAR_CENTER) / 5) + 0.30 * ((age - A_STAR_CENTER) / 5)^3
   )
 
   for (k in seq_len(p)) {

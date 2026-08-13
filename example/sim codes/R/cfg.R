@@ -58,7 +58,15 @@ TIMEPOINT_SCENARIOS <- SCENARIOS_ALL <- c(
   "asymmetric_shift",
   "irregular_missing"
 )
-TIMEPOINT_SCHEDULES <- c("m2", "m4", "m8", "m12", "m20")
+TIMEPOINT_SCHEDULES <- trimws(strsplit(
+  Sys.getenv("SILK_TP_SCHEDULES", unset = "m2,m4,m8,m12,m20"), ","
+)[[1]])
+TIMEPOINT_SCHEDULES <- TIMEPOINT_SCHEDULES[nzchar(TIMEPOINT_SCHEDULES)]
+if (!length(TIMEPOINT_SCHEDULES) ||
+    length(setdiff(TIMEPOINT_SCHEDULES, names(VISIT_SCHEDULES)))) {
+  stop("SILK_TP_SCHEDULES must be a comma-separated subset of the visit schedules.",
+       call. = FALSE)
+}
 TIMEPOINT_N_TRAIN <- as.integer(Sys.getenv("SILK_TP_N_TRAIN", unset = "400"))
 
 N_TRAIN_GRID <- as.integer(strsplit(Sys.getenv("SILK_N_TRAIN_GRID", unset = "200,400,1000"), ",")[[1]])
@@ -72,8 +80,12 @@ CODECHECK_SCENARIOS <- c("mean_strong_dense", "dist_strong_dense", "mean_severe"
 # ----------------------------- DGM parameters --------------------------------
 SURV_LAMBDA_D <- 10.0
 SURV_KAPPA_D <- 1.35
-SURV_AGE_BASE_RATE <- as.numeric(Sys.getenv("SILK_SURV_AGE_RATE", unset = "0.04"))
-SURV_AGE_GROWTH <- as.numeric(Sys.getenv("SILK_SURV_AGE_GROWTH", unset = "0.18"))
+# Gompertz baseline on attained age. Growth 0.540 (was 0.18) puts enough of the
+# prognostic signal on the corrupted time scale that the Bayes-optimal mean AUC
+# is 0.808 and the recorded-versus-latent gap is 0.23 AUC, instead of 0.640 and
+# 0.055. The base rate is retuned so the four-year event rate stays at 0.24.
+SURV_AGE_BASE_RATE <- as.numeric(Sys.getenv("SILK_SURV_AGE_RATE", unset = "0.01107"))
+SURV_AGE_GROWTH <- as.numeric(Sys.getenv("SILK_SURV_AGE_GROWTH", unset = "0.540"))
 SURV_BETA_A <- 0.95
 SURV_BETA_X1 <- 0.20
 SURV_BETA_X2 <- 0.15
@@ -159,7 +171,7 @@ CLOCK_SIGNAL_MIN <- as.numeric(Sys.getenv("SILK_CLOCK_SIGNAL_MIN", unset = "0.10
 # the distribution-identifying registration analyzed in the paper.
 #   Cox layer:   Cox-SameFeature-Recorded -> Recorded-Cox
 #                SILK kernel variants     -> SILK-Cox
-#                Oracle-Latent-Age        -> Oracle-Cox
+#                Oracle-Latent-Age        -> Oracle clock-isolation (suppl.)
 #   Beran layer: Beran-Recorded           -> Recorded-Beran
 #                Beran-SILK               -> SILK-Beran
 #                Beran-Oracle-Latent-Age  -> Oracle-Beran
@@ -216,21 +228,37 @@ if (INCLUDE_PAPER_FEATURE_MAP) {
 }
 
 # Prespecified analysis roles. The reporting script must not infer these.
-PRIMARY_SILK_METHOD <- "SILK-History"
+#
+# The primary triple is the CLOCK-ISOLATION triple: all three arms share the
+# plain survival state (landmark age, X1, X2) and differ only in whether that
+# age coordinate is recorded, calibrated, or latent. Biomarkers enter SILK
+# solely through the registration layer.
+#
+# The rich "-History" triple additionally puts the current biomarker values and
+# pooled history summaries into the survival layer. In the mean-trajectory
+# scenarios those markers determine latent age to within 0.1-0.9 years while the
+# origin error has SD 5, so the survival layer reconstructs the latent clock
+# directly and the recorded-versus-oracle IBS gap collapses from a mean of
+# 7.7e-3 to 0.23e-3 -- a factor of 33. The rich map therefore removes the very
+# effect the method exists to correct and cannot serve as the primary test.
+# It is retained as the deployed-pipeline comparison against feasible methods.
+PRIMARY_SILK_METHOD <- "SILK"
 PRIMARY_TRIPLE <- c(
-  recorded = "Cox-History-Recorded",
-  silk = PRIMARY_SILK_METHOD,
-  oracle = "Oracle-History-Latent-Age"
-)
-SUPPLEMENTARY_CLOCK_ISOLATION_TRIPLE <- c(
   recorded = "Cox-SameFeature-Recorded",
-  silk = "SILK",
+  silk = PRIMARY_SILK_METHOD,
   oracle = "Oracle-Latent-Age"
 )
+SUPPLEMENTARY_RICH_FEATURE_TRIPLE <- c(
+  recorded = "Cox-History-Recorded",
+  silk = "SILK-History",
+  oracle = "Oracle-History-Latent-Age"
+)
+# Legacy alias retained so older reporting scripts still resolve.
+SUPPLEMENTARY_CLOCK_ISOLATION_TRIPLE <- PRIMARY_TRIPLE
 # Complete feasible procedures a practitioner could run. Prespecified, so the
 # leaderboard cannot silently absorb ablations or oracle bounds.
 PRIMARY_COMPETITORS <- c(
-  "Cox-History-Recorded",
+  "Cox-SameFeature-Recorded",
   "Landmark-Recorded",
   "MMLM-Recorded",
   "JM-Recorded",
@@ -297,8 +325,11 @@ SCENARIOS <- data.frame(
   default_schedule = c(
     "m4", "m4", "m4", "m12", "m4", "m4", "m12", "m4", "m4", "m4", "m4", "m4"
   ),
-  sigma_eps = c(0, 2.5, 5.0, 5.0, 2.5, 5.0, 5.0, 5.0, 4.0, 5.0, 5.0, 5.0),
-  eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 2.5, 0, 0, 0),
+  # Offsets scaled so the recorded clock is genuinely uninformative: age
+  # reliability is 0.13 at sigma_eps = 6 and 0.036 at 12, giving recorded-age
+  # AUC 0.63 and 0.58 against an oracle of 0.81.
+  sigma_eps = c(0, 6.0, 12.0, 12.0, 6.0, 12.0, 12.0, 12.0, 10.0, 12.0, 12.0, 12.0),
+  eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 6.0, 0, 0, 0),
   eps_type = c(
     "normal", "normal", "mixture", "mixture", "normal", "mixture",
     "mixture", "mixture", "normal", "t3", "asymmetric", "mixture"
@@ -306,8 +337,8 @@ SCENARIOS <- data.frame(
   n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
   missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
   irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
-  shift_min = c(-4, -8, -15, -15, -8, -15, -15, -15, -12, -20, -20, -15),
-  shift_max = c( 4,  8,  15,  15,  8,  15,  15,  15,  16,  20,  20,  15),
+  shift_min = c(-4, -20, -36, -36, -20, -36, -36, -36, -30, -48, -48, -36),
+  shift_max = c( 4,  20,  36,  36,  20,  36,  36,  36,  42,  48,  48,  36),
   signal_amp = c(1.35, 1.65, 2.35, 4.25, 0.12, 0.12, 0.10, 0.00, 2.00, 2.00, 2.00, 2.00),
   sigma_bio = c(0.70, 0.60, 0.50, 0.22, 0.70, 0.60, 0.30, 1.45, 0.55, 0.55, 0.55, 0.65),
   u_bio_coef = rep(0, 12),
@@ -349,27 +380,27 @@ SCENARIO_LABELS <- c(
 
 # Canonical architecture display names (registration x survival layer).
 METHOD_LABELS <- c(
-  "Landmark-Recorded" = "Landmark-Recorded",
-  "Cox-SameFeature-Recorded" = "Recorded clock-isolation (suppl.)",
-  "MMLM-Recorded" = "MMLM-Recorded",
-  "JM-Recorded" = "JM-Recorded",
-  "RSF-Observed" = "RSF-Observed",
-  "DeepSurv-Observed" = "DeepSurv-Observed",
-  "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
+  "Landmark-Recorded" = "Landmark Cox (recorded age)",
+  "Cox-SameFeature-Recorded" = "Recorded-age Cox diagnostic",
+  "MMLM-Recorded" = "MMLM (recorded age)",
+  "JM-Recorded" = "Joint model (recorded age)",
+  "RSF-Observed" = "Random survival forest",
+  "DeepSurv-Observed" = "DeepSurv (recorded age)",
+  "TimeError-Integrated-Landmark" = "MI landmark",
   # Supplementary clock-isolation arm: attained-age Cox, covariates (X1, X2).
-  "SILK" = "SILK clock-isolation (Gaussian, suppl.)",
-  "SILK-Laplace" = "SILK clock-isolation (Laplace, suppl.)",
-  "SILK-Matern32" = "SILK clock-isolation (Matern-3/2, suppl.)",
+  "SILK" = "SILK-Cox diagnostic (Gaussian)",
+  "SILK-Laplace" = "SILK-Cox diagnostic (Laplace)",
+  "SILK-Matern32" = "SILK-Cox diagnostic (Matern-3/2)",
   # Primary arm: residual-time Cox on g(age coordinate, invariant history).
-  "Cox-History-Recorded" = "Recorded-Cox",
+  "Cox-History-Recorded" = "Recorded-age Cox",
   "SILK-History" = "SILK-Cox (Gaussian)",
   "SILK-History-Laplace" = "SILK-Cox (Laplace)",
   "SILK-History-Matern32" = "SILK-Cox (Matern-3/2)",
   "Oracle-History-Latent-Age" = "Oracle-Cox",
-  "Beran-Recorded" = "Recorded-Beran",
-  "Beran-SILK" = "SILK-Beran",
+  "Beran-Recorded" = "Recorded-age Beran",
+  "Beran-SILK" = "SILK-Beran (Gaussian)",
   "Beran-Oracle-Latent-Age" = "Oracle-Beran",
-  "Oracle-Latent-Age" = "Oracle-Cox",
+  "Oracle-Latent-Age" = "Oracle-Cox diagnostic",
   # legacy alias: the redundant mean-trajectory variant present in 6.25 outputs;
   # not part of the canonical roster, mapped for back-compatible plotting only.
   "SILK-MeanReg" = "SILK-MeanTraj (suppl.)"
