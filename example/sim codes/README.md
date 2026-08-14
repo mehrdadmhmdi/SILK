@@ -81,7 +81,7 @@ load the prepared environment; they never clone or install packages.
 Every Slurm job uses:
 
 ```bash
-#SBATCH --account=bhmn-delta-cpu
+#SBATCH --account=bfez-delta-cpu
 #SBATCH --partition=cpu
 
 module purge

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=silk-submit
-#SBATCH --account=bhmn-delta-cpu
+#SBATCH --account=bfez-delta-cpu
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
@@ -200,7 +200,7 @@ while IFS=$'\t' read -r resource_class n_tasks _sbatch task_list cpus memory wal
   array_spec="1-${n_tasks}"
   job_id="$(sbatch --parsable \
     --job-name="silk-${resource_class}" \
-    --account=bhmn-delta-cpu \
+    --account=bfez-delta-cpu \
     --partition=cpu \
     --cpus-per-task="$cpus" \
     --mem="$memory" \

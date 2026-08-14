@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --account=bhmn-delta-cpu
+#SBATCH --account=bfez-delta-cpu
 #SBATCH --partition=cpu
 
 set -euo pipefail

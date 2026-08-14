@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=silk-collect
-#SBATCH --account=bhmn-delta-cpu
+#SBATCH --account=bfez-delta-cpu
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=12G

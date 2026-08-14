@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=silk-repair-submit
-#SBATCH --account=bhmn-delta-cpu
+#SBATCH --account=bfez-delta-cpu
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
@@ -67,7 +67,7 @@ fi
 # Deliberately no %N array throttle: only the site/account/QOS limits apply.
 array_job="$(sbatch --parsable \
   --job-name=silk-failed-comparators \
-  --account=bhmn-delta-cpu \
+  --account=bfez-delta-cpu \
   --partition=cpu \
   --cpus-per-task=4 \
   --mem=16G \
