@@ -26,18 +26,23 @@ macs_analysis_dir <- function(default = getwd()) {
 }
 
 ANALYSIS_DIR <- macs_analysis_dir()
-PACKAGE_DIR  <- normalizePath(file.path(ANALYSIS_DIR, "..", "..", ".."),
+PACKAGE_DIR  <- normalizePath(file.path(ANALYSIS_DIR, "..", "..", "..", ".."),
                                winslash = "/", mustWork = TRUE)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
-# SILK's own Imports (survival, nlme, ggplot2, grid, parallel, ...) install
-# automatically with the package. These are the extra packages the analysis
-# scripts need: the joint-model and random-forest comparators, plus pkgload
-# for loading the local package source during development.
-required_packages <- c("survival", "nlme", "ggplot2", "JMbayes2", "ranger", "pkgload")
-for (pkg in required_packages) {
-  if (!requireNamespace(pkg, quietly = TRUE))
-    install.packages(pkg, repos = "https://cloud.r-project.org")
+# Do not modify the user's R library during a confirmatory analysis. Fail with
+# an explicit dependency list so that the software environment can be recorded
+# before the analysis is run.
+required_packages <- c("survival", "nlme", "ggplot2", "pkgload")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages)) {
+  stop(
+    "Missing required packages: ", paste(missing_packages, collapse = ", "),
+    ". Install them before running the MACS analysis.",
+    call. = FALSE
+  )
 }
 
 # ── Load SILK package ────────────────────────────────────────────────────────
@@ -53,8 +58,12 @@ if (file.exists(file.path(PACKAGE_DIR, "DESCRIPTION")) &&
 # ── Paths ────────────────────────────────────────────────────────────────────
 DATA_DIR    <- normalizePath(file.path(ANALYSIS_DIR, "..", "data"),
                              winslash = "/", mustWork = TRUE)
-RESULTS_DIR <- file.path(ANALYSIS_DIR, "results")
-FIGURES_DIR <- file.path(ANALYSIS_DIR, "figures")
+RESULTS_DIR <- Sys.getenv(
+  "MACS_RESULTS_DIR", unset = file.path(ANALYSIS_DIR, "results")
+)
+FIGURES_DIR <- Sys.getenv(
+  "MACS_FIGURES_DIR", unset = file.path(ANALYSIS_DIR, "figures")
+)
 dir.create(RESULTS_DIR, showWarnings = FALSE, recursive = TRUE)
 dir.create(FIGURES_DIR, showWarnings = FALSE, recursive = TRUE)
 
@@ -70,26 +79,21 @@ silk_options(
   ALT_TOL                = 1e-3,
   N_STARTS               = 3L,
   RANDOM_START_SD        = 0.5,
-  N_FOLDS                = 5L,
+  N_FOLDS                = as.integer(Sys.getenv("MACS_INNER_FOLDS", unset = "5")),
   ANCHOR_MODE            = "rx",
   # Parallel cross-fit folds. "auto" uses all available/allocated cores
   # (honours SILK_N_CORES, then SLURM_CPUS_PER_TASK, then detectCores()).
   # Set N_CORES = 1 or SILK_N_CORES=1 to disable. Results are identical to
   # serial because each fold is self-seeded.
   N_CORES                = "auto",
-  # Shrink the estimated origin shift toward the anchor to curb boundary
-  # pile-up on the [-4,4] grid (Gaussian put ~22% of shifts at the boundary,
-  # linear ~99%). 0 disables it. Tune with a quick CV sweep over
-  # {0, 5e-4, 1e-3, 2e-3, 5e-3} via SILK_SHIFT_RIDGE, keeping the value with
-  # the best held-out AUC; 1e-3 is a sensible starting point.
+  # Prespecified stabilization. This value is not selected on the outer
+  # held-out predictions.
   SHIFT_RIDGE            = as.numeric(Sys.getenv("SILK_SHIFT_RIDGE", unset = "1e-3")),
   H_A_BANDWIDTH          = 1.5,
   H_X_BANDWIDTH          = 2.0,
-  REGISTRATION_KERNEL        = "rbf",
-  REGISTRATION_KERNEL_APPROX = "rff",
-  KERNEL_RFF_DIM             = 512L,
-  KERNEL_RFF_SEED            = 20240611L,
-  KERNEL_CHUNK_SIZE          = 5000L,
+  BIOMARKER_KERNEL        = "gaussian",
+  BIOMARKER_BANDWIDTH     = "median",
+  BIOMARKER_BANDWIDTH_SCALE = 1,
   SURVIVAL_HISTORY_BIOMARKERS = 3L,
   PROFILE_TEMPERATURE    = 0.015,
   PROFILE_LOCAL_RADIUS   = 0.8,
@@ -98,30 +102,32 @@ silk_options(
   FIGURE_DPI             = 600,
   FIGURE_BASE_SIZE       = 14,
   METHOD_ORDER = c(
-    "Landmark-Recorded", "MMLM-Recorded", "JM-Recorded",
-    "SILK-LinearMMD", "SILK"
+    "SILK-Cox", "Cox-Recorded-SameFeature", "MMLM-Recorded"
   ),
   METHOD_LABELS = c(
-    "Landmark-Recorded" = "Landmarking",
-    "MMLM-Recorded"     = "Mixed-Model Landmarking",
-    "JM-Recorded"       = "Joint Model",
-    "SILK-LinearMMD"    = "SILK Linear Kernel + Cox",
-    "SILK"              = "SILK Gaussian Kernel + Cox"
+    "SILK-Cox"                 = "SILK-Cox (Gaussian)",
+    "Cox-Recorded-SameFeature" = "Recorded-clock Cox",
+    "MMLM-Recorded"            = "Parametric MMLM-Cox"
   )
 )
-
-# ── Joint-model (JMbayes2) settings ──────────────────────────────────────────
-# Match the simulation's JM-Recorded comparator (current-value association,
-# recorded disease-age clock). JM is the slowest method; expect minutes per fold.
-JM_N_CHAINS       <- 1L
-JM_N_ITER         <- 1000L
-JM_N_BURNIN       <- 500L
-JM_PRED_N_SAMPLES <- 200L
 
 # ── Real-data registration grid ──────────────────────────────────────────────
 # This is only a candidate search range. It is not an assumed error scenario.
 MACS_SHIFT_RANGE <- c(-4, 4)
-MACS_FIXED_LANDMARKS <- c(1, 2, 3, 5)
+landmark_override <- trimws(Sys.getenv("MACS_LANDMARKS", unset = ""))
+MACS_FIXED_LANDMARKS <- if (nzchar(landmark_override)) {
+  as.numeric(trimws(strsplit(landmark_override, ",", fixed = TRUE)[[1]]))
+} else {
+  c(1, 2, 3, 5)
+}
+if (any(!is.finite(MACS_FIXED_LANDMARKS)) || any(MACS_FIXED_LANDMARKS <= 0)) {
+  stop("MACS_LANDMARKS must be a comma-separated list of positive numbers.",
+       call. = FALSE)
+}
+# The primary analysis uses the three complete immunologic markers. Viral load
+# remains in the processed file but is excluded because its historical
+# subject-median imputation can use measurements obtained after a landmark.
+MACS_PRIMARY_BIOMARKERS <- c("B1", "B2", "B3")
 MACS_USE_FIXED_LANDMARKS <- !identical(
   tolower(Sys.getenv("MACS_USE_FIXED_LANDMARKS", unset = "true")),
   "false"

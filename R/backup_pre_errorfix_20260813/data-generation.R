@@ -12,19 +12,9 @@ r_common_shift <- function(n, sigma_eps, eps_mean = 0, eps_type = "normal") {
   if (eps_type == "normal") {
     eps_mean + stats::rnorm(n, sd = sigma_eps)
   } else if (eps_type == "mixture") {
-    # Contaminated normal. The component SDs are specified RELATIVE to each
-    # other and the draw is then rescaled to marginal SD sigma_eps, so what
-    # matters is the ratio tail_sd / core_sd, not their absolute values.
-    # A large ratio concentrates almost all mass at a near-zero shift: with the
-    # former (core 0.35, tail 6.00) the rescaled core SD was only
-    # 0.35 * sigma_eps / 2.70 = 0.65 years at sigma_eps = 5, leaving 80% of
-    # subjects with an essentially correct clock and P(|eps| < 1) = 72%.
-    # The current values give a rescaled core SD of 3.10 and tail SD of 9.30 at
-    # sigma_eps = 5, i.e. a genuine common shift for every subject with a
-    # threefold-worse contaminating component.
-    tail_prob <- as.numeric(silk_opt("MIX_TAIL_PROB"))[1L]
-    core_sd <- as.numeric(silk_opt("MIX_CORE_SD"))[1L]
-    tail_sd <- as.numeric(silk_opt("MIX_TAIL_SD"))[1L]
+    tail_prob <- 0.20
+    core_sd <- 0.35
+    tail_sd <- 6.00
     is_tail <- stats::rbinom(n, size = 1L, prob = tail_prob)
     z <- stats::rnorm(n, sd = ifelse(is_tail == 1L, tail_sd, core_sd))
     mix_sd <- sqrt((1 - tail_prob) * core_sd^2 + tail_prob * tail_sd^2)
@@ -33,17 +23,8 @@ r_common_shift <- function(n, sigma_eps, eps_mean = 0, eps_type = "normal") {
     z <- (stats::rexp(n) - stats::rexp(n)) / sqrt(2)
     eps_mean + z * sigma_eps
   } else if (eps_type == "t3") {
-    # Heavy-tailed origin error. Standardising a t to marginal SD sigma_eps
-    # inflates the interquartile range and therefore produces a WIDER bulk and
-    # only modestly heavier tails than N(0, sigma_eps) -- the opposite of the
-    # intended contrast. Matching the interquartile range instead keeps the
-    # bulk comparable to N(0, sigma_eps) while leaving genuinely heavy tails:
-    # at sigma_eps = 5, P(|eps| > 15) rises from 0.3% under the normal to 5.2%.
-    # Note that sigma_eps is then a normal-equivalent scale, not the marginal
-    # SD, which is not finite in a useful sense for a t with df = 2.5.
-    df <- as.numeric(silk_opt("HEAVY_TAIL_DF"))[1L]
-    scale_iqr <- sigma_eps / (stats::qt(0.75, df) / stats::qnorm(0.75))
-    eps_mean + stats::rt(n, df = df) * scale_iqr
+    df <- 2.5
+    eps_mean + stats::rt(n, df = df) / sqrt(df / (df - 2)) * sigma_eps
   } else if (eps_type == "asymmetric") {
     z <- stats::rchisq(n, df = 1) - 1
     eps_mean + z / stats::sd(z) * sigma_eps

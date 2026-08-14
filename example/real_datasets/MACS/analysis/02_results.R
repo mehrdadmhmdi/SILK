@@ -3,8 +3,40 @@
 # Evaluate CV predictions and produce tables + figures
 # =============================================================================
 
-source("00_setup.R")
+macs_results_script_dir <- function(default = getwd()) {
+  frames <- sys.frames()
+  for (ii in rev(seq_along(frames))) {
+    ofile <- frames[[ii]]$ofile
+    if (!is.null(ofile) && nzchar(ofile)) {
+      return(dirname(normalizePath(ofile, winslash = "/", mustWork = TRUE)))
+    }
+  }
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- grep("^--file=", args, value = TRUE)
+  if (length(file_arg)) {
+    return(normalizePath(dirname(sub("^--file=", "", file_arg[1])),
+                         winslash = "/", mustWork = TRUE))
+  }
+  normalizePath(default, winslash = "/", mustWork = TRUE)
+}
+
+source(file.path(macs_results_script_dir(), "00_setup.R"), chdir = TRUE)
 library(ggplot2)
+
+# Remove exact generated filenames from superseded exploratory reporting. The
+# final analysis contains no age-correction diagnostic and no cross-cell mean.
+obsolete_outputs <- c(
+  file.path(RESULTS_DIR, "macs_silk_shifts.csv"),
+  file.path(RESULTS_DIR, "macs_summary.csv"),
+  file.path(RESULTS_DIR, "macs_predictions_previous.csv"),
+  file.path(FIGURES_DIR, "fig4a_shift_distribution.pdf"),
+  file.path(FIGURES_DIR, "fig4a_shift_distribution.png"),
+  file.path(FIGURES_DIR, "fig4b_calibrated_landmark.pdf"),
+  file.path(FIGURES_DIR, "fig4b_calibrated_landmark.png"),
+  file.path(FIGURES_DIR, "fig5_km_risk_strata.pdf"),
+  file.path(FIGURES_DIR, "fig5_km_risk_strata.png")
+)
+invisible(file.remove(obsolete_outputs[file.exists(obsolete_outputs)]))
 
 # ── 1. Load predictions ─────────────────────────────────────────────────────
 predictions <- read.csv(file.path(RESULTS_DIR, "macs_predictions.csv"),
@@ -42,17 +74,27 @@ if (!"landmark_time" %in% names(pred_eval)) pred_eval$landmark_time <- NA_real_
 outcome_data <- unique(pred_eval[, c("subject_id", "landmark_set", "landmark_time",
                                      "residual_time", "event_status")])
 outcome_data <- outcome_data[is.finite(outcome_data$residual_time), ]
-censor_fit <- survival::survfit(
-  survival::Surv(residual_time, 1L - event_status) ~ 1,
-  data = outcome_data
-)
-censor_surv <- function(times) {
-  times <- pmax(as.numeric(times), 0)
-  out <- summary(censor_fit, times = times, extend = TRUE)$surv
-  pmax(out, 1e-6)
+
+make_censor_survival <- function(data) {
+  fit <- survival::survfit(
+    survival::Surv(residual_time, 1L - event_status) ~ 1,
+    data = data
+  )
+  function(times, left_limit = FALSE) {
+    times <- pmax(as.numeric(times), 0)
+    vapply(times, function(time) {
+      index <- if (isTRUE(left_limit)) {
+        which(fit$time < time)
+      } else {
+        which(fit$time <= time)
+      }
+      value <- if (length(index)) fit$surv[max(index)] else 1
+      pmax(value, 1e-6)
+    }, numeric(1))
+  }
 }
 
-ipcw_horizon <- function(U, delta, horizon) {
+ipcw_horizon <- function(U, delta, horizon, censor_survival) {
   U <- as.numeric(U)
   delta <- as.integer(delta)
   y <- rep(NA_real_, length(U))
@@ -62,9 +104,9 @@ ipcw_horizon <- function(U, delta, horizon) {
   controls <- U > horizon
 
   y[cases] <- 1
-  w[cases] <- 1 / censor_surv(U[cases])
+  w[cases] <- 1 / censor_survival(U[cases], left_limit = TRUE)
   y[controls] <- 0
-  w[controls] <- 1 / censor_surv(rep(horizon, sum(controls)))
+  w[controls] <- 1 / censor_survival(rep(horizon, sum(controls)))
 
   data.frame(y = y, w = w, usable = w > 0)
 }
@@ -113,13 +155,16 @@ weighted_calibration_stats <- function(y, p, w) {
 # ── 2. Per-horizon metrics ───────────────────────────────────────────────────
 metrics_list <- list()
 for (landmark_set in sort(unique(pred_eval$landmark_set))) {
+  censor_survival <- make_censor_survival(
+    outcome_data[outcome_data$landmark_set == landmark_set, , drop = FALSE]
+  )
   for (method in unique(pred_eval$method)) {
     for (h in HORIZONS) {
       z <- pred_eval[pred_eval$landmark_set == landmark_set &
                        pred_eval$method == method &
                        pred_eval$horizon == h, ]
       if (nrow(z) < 10) next
-      hw <- ipcw_horizon(z$U, z$delta, h)
+      hw <- ipcw_horizon(z$U, z$delta, h, censor_survival)
       y <- hw$y
       w <- hw$w
       p <- z$risk_pred
@@ -140,6 +185,9 @@ for (landmark_set in sort(unique(pred_eval$landmark_set))) {
         landmark_set = landmark_set,
         landmark_time = unique(z$landmark_time)[1],
         method = method, horizon = h, n = sum(usable),
+        n_events = sum(y[usable] == 1),
+        n_controls = sum(y[usable] == 0),
+        n_censored_before_horizon = sum(!usable),
         event_rate   = weighted.mean(y[usable], w[usable]),
         auc_pooled   = weighted_auc(y, p, w),
         auc_mean     = if (length(fold_auc)) mean(fold_auc) else NA,
@@ -155,30 +203,61 @@ for (landmark_set in sort(unique(pred_eval$landmark_set))) {
   }
 }
 metrics <- do.call(rbind, metrics_list)
+if (is.null(metrics) || !nrow(metrics)) {
+  stop("No evaluable landmark-method-horizon cells were found.", call. = FALSE)
+}
 metrics$method_label <- ifelse(metrics$method %in% names(METHOD_LABELS),
                                METHOD_LABELS[metrics$method], metrics$method)
+display_order <- unname(METHOD_LABELS[
+  intersect(silk_opt("METHOD_ORDER"), names(METHOD_LABELS))
+])
+metrics$method_label <- factor(metrics$method_label, levels = display_order)
 
 cat("\n=== Per-Horizon Metrics ===\n")
-print(metrics[, c("landmark_set", "method_label","horizon","n","event_rate",
+print(metrics[, c("landmark_set", "method_label","horizon","n","n_events","event_rate",
                    "auc_pooled","brier_pooled","cal_slope")],
       digits = 3, row.names = FALSE)
 
 write.csv(metrics, file.path(RESULTS_DIR, "macs_metrics_per_horizon.csv"),
           row.names = FALSE)
 
-# ── 3. Summary table ────────────────────────────────────────────────────────
-summary_df <- do.call(rbind, lapply(split(metrics, metrics$method), function(z) {
-  data.frame(method = z$method[1], method_label = z$method_label[1],
-             mean_auc = mean(z$auc_pooled, na.rm = TRUE),
-             mean_brier = mean(z$brier_pooled, na.rm = TRUE),
-             mean_cal_slope = mean(z$cal_slope, na.rm = TRUE),
-             stringsAsFactors = FALSE)
-}))
-cat("\n=== Summary Across Horizons ===\n")
-print(summary_df, digits = 3, row.names = FALSE)
-write.csv(summary_df, file.path(RESULTS_DIR, "macs_summary.csv"), row.names = FALSE)
+# Complete comparator table for manuscript reporting. All prespecified
+# landmark-horizon cells are retained; lower Brier scores are preferable.
+comparator_table <- metrics[, c(
+  "landmark_set", "landmark_time", "horizon", "method", "method_label",
+  "n", "n_events", "n_controls", "n_censored_before_horizon",
+  "auc_pooled", "brier_pooled", "cal_intercept", "cal_slope"
+)]
+method_rank <- match(comparator_table$method, silk_opt("METHOD_ORDER"))
+comparator_table <- comparator_table[
+  order(comparator_table$landmark_time, comparator_table$horizon, method_rank),
+]
+write.csv(comparator_table,
+          file.path(RESULTS_DIR, "macs_comparator_table.csv"), row.names = FALSE)
 
-# ── 3b. Profile-gap diagnostics ─────────────────────────────────────────────
+# Primary estimand: benefit of replacing the recorded disease clock with the
+# SILK-calibrated clock while holding the Cox predictors fixed.
+primary_silk <- metrics[metrics$method == "SILK-Cox", c(
+  "landmark_set", "landmark_time", "horizon", "n", "n_events",
+  "auc_pooled", "brier_pooled", "cal_intercept", "cal_slope"
+)]
+primary_recorded <- metrics[metrics$method == "Cox-Recorded-SameFeature", c(
+  "landmark_set", "horizon", "auc_pooled", "brier_pooled",
+  "cal_intercept", "cal_slope"
+)]
+names(primary_silk)[6:9] <- paste0(names(primary_silk)[6:9], "_silk")
+names(primary_recorded)[3:6] <- paste0(names(primary_recorded)[3:6], "_recorded")
+primary_comparison <- merge(primary_silk, primary_recorded,
+                            by = c("landmark_set", "horizon"), all = TRUE)
+primary_comparison$auc_gain_silk <-
+  primary_comparison$auc_pooled_silk - primary_comparison$auc_pooled_recorded
+primary_comparison$brier_gain_silk <-
+  primary_comparison$brier_pooled_recorded - primary_comparison$brier_pooled_silk
+write.csv(primary_comparison,
+          file.path(RESULTS_DIR, "macs_primary_silk_comparison.csv"),
+          row.names = FALSE)
+
+# ── 3. Profile-gap diagnostics ──────────────────────────────────────────────
 diagnostics_file <- file.path(RESULTS_DIR, "macs_profile_diagnostics.csv")
 if (file.exists(diagnostics_file)) {
   diagnostics <- read.csv(diagnostics_file, stringsAsFactors = FALSE)
@@ -201,32 +280,35 @@ if (file.exists(diagnostics_file)) {
 
 # ── 4. Plotting setup ───────────────────────────────────────────────────────
 method_colors <- c(
-  "Landmarking"                  = "grey50",
-  "Mixed-Model Landmarking"      = UIUC_BLUE,
-  "Joint Model"                  = "#E15759",
-  "SILK Linear Kernel + Cox"     = "#8C564B",
-  "SILK Gaussian Kernel + Cox"   = UIUC_ORANGE
+  "Recorded-clock Cox"       = "grey50",
+  "Parametric MMLM-Cox"      = UIUC_ORANGE,
+  "SILK-Cox (Gaussian)"      = UIUC_BLUE
 )
 method_colors <- method_colors[intersect(names(method_colors), unique(metrics$method_label))]
 landmark_facets <- length(unique(metrics$landmark_set)) > 1L
+landmark_labels <- c(
+  "fixed_1y" = "1-year landmark", "fixed_2y" = "2-year landmark",
+  "fixed_3y" = "3-year landmark", "fixed_5y" = "5-year landmark",
+  "last_visit" = "Last observed visit"
+)
 
 # ── 5. Figure 1: AUC by horizon ─────────────────────────────────────────────
 p1 <- ggplot(metrics, aes(x = horizon, y = auc_pooled,
                            color = method_label, shape = method_label)) +
   geom_line(linewidth = 1) +
   geom_point(size = 3) +
-  geom_errorbar(aes(ymin = auc_mean - 1.96*auc_se,
-                     ymax = auc_mean + 1.96*auc_se),
-                width = 0.15, linewidth = 0.6) +
   scale_color_manual(values = method_colors) +
   scale_x_continuous(breaks = HORIZONS) +
-  labs(x = "Prediction Horizon (years)", y = "AUC",
+  labs(x = "Prediction horizon (years)",
+       y = "Time-dependent IPCW AUC (higher is better)",
        color = "Method", shape = "Method",
-       title = "Discrimination: AUC by Prediction Horizon",
-       subtitle = "MACS PDS fixed-landmark cross-validation") +
+       title = "Discrimination across prediction horizons") +
   theme_minimal(base_size = 14) +
   theme(legend.position = "bottom")
-if (landmark_facets) p1 <- p1 + facet_wrap(~ landmark_set)
+if (landmark_facets) {
+  p1 <- p1 + facet_wrap(~ landmark_set,
+                        labeller = as_labeller(landmark_labels))
+}
 
 ggsave(file.path(FIGURES_DIR, "fig1_auc_by_horizon.pdf"), p1, width=8, height=5.5, dpi=600)
 ggsave(file.path(FIGURES_DIR, "fig1_auc_by_horizon.png"), p1, width=8, height=5.5, dpi=300)
@@ -236,18 +318,18 @@ p2 <- ggplot(metrics, aes(x = horizon, y = brier_pooled,
                            color = method_label, shape = method_label)) +
   geom_line(linewidth = 1) +
   geom_point(size = 3) +
-  geom_errorbar(aes(ymin = brier_mean - 1.96*brier_se,
-                     ymax = brier_mean + 1.96*brier_se),
-                width = 0.15, linewidth = 0.6) +
   scale_color_manual(values = method_colors) +
   scale_x_continuous(breaks = HORIZONS) +
-  labs(x = "Prediction Horizon (years)", y = "Brier Score",
+  labs(x = "Prediction horizon (years)",
+       y = "IPCW Brier score (lower is better)",
        color = "Method", shape = "Method",
-       title = "Prediction Accuracy: Brier Score by Horizon",
-       subtitle = "MACS PDS fixed-landmark cross-validation") +
+       title = "Prediction error across prediction horizons") +
   theme_minimal(base_size = 14) +
   theme(legend.position = "bottom")
-if (landmark_facets) p2 <- p2 + facet_wrap(~ landmark_set)
+if (landmark_facets) {
+  p2 <- p2 + facet_wrap(~ landmark_set,
+                        labeller = as_labeller(landmark_labels))
+}
 
 ggsave(file.path(FIGURES_DIR, "fig2_brier_by_horizon.pdf"), p2, width=8, height=5.5, dpi=600)
 ggsave(file.path(FIGURES_DIR, "fig2_brier_by_horizon.png"), p2, width=8, height=5.5, dpi=300)
@@ -256,13 +338,16 @@ ggsave(file.path(FIGURES_DIR, "fig2_brier_by_horizon.png"), p2, width=8, height=
 cal_list <- list()
 n_bins <- 5L
 for (landmark_set in sort(unique(pred_eval$landmark_set))) {
+  censor_survival <- make_censor_survival(
+    outcome_data[outcome_data$landmark_set == landmark_set, , drop = FALSE]
+  )
   for (method in unique(pred_eval$method)) {
     for (h in HORIZONS) {
       z <- pred_eval[pred_eval$landmark_set == landmark_set &
                        pred_eval$method == method &
                        pred_eval$horizon == h, ]
       if (nrow(z) < 30) next
-      hw <- ipcw_horizon(z$U, z$delta, h)
+      hw <- ipcw_horizon(z$U, z$delta, h, censor_survival)
       z <- z[hw$usable, ]
       y <- hw$y[hw$usable]
       w <- hw$w[hw$usable]
@@ -291,11 +376,10 @@ cal_df <- if (length(cal_list)) {
              mean_pred = numeric(), obs_rate = numeric())
 }
 
-key_h <- c(2, 5)
-key_h <- key_h[key_h %in% cal_df$horizon]
-if (length(key_h) > 0) {
-  cal_sub <- cal_df[cal_df$horizon %in% key_h, ]
-  cal_sub$horizon_label <- paste0("Horizon = ", cal_sub$horizon, " yr")
+calibration_horizon <- if (5 %in% cal_df$horizon) 5 else max(cal_df$horizon)
+if (is.finite(calibration_horizon)) {
+  cal_sub <- cal_df[cal_df$horizon == calibration_horizon, ]
+  cal_sub$method_label <- factor(cal_sub$method_label, levels = display_order)
   cal_axis_max <- max(cal_sub$mean_pred, cal_sub$obs_rate, 0, na.rm = TRUE)
   cal_axis_max <- min(1, max(0.05, 1.05 * cal_axis_max))
 
@@ -307,87 +391,29 @@ if (length(key_h) > 0) {
     scale_x_continuous(limits = c(0, cal_axis_max)) +
     scale_y_continuous(limits = c(0, cal_axis_max)) +
     coord_equal() +
-    labs(x = "Predicted Risk", y = "Observed Proportion",
+    labs(x = "Predicted risk", y = "Observed risk (IPCW)",
          color = "Method", shape = "Method",
-         title = "Calibration: Predicted vs Observed Risk") +
+         title = paste0(calibration_horizon,
+                        "-Year Risk Calibration by Landmark")) +
     theme_minimal(base_size = 14) +
     theme(legend.position = "bottom")
   if (length(unique(cal_sub$landmark_set)) > 1L) {
-    p3 <- p3 + facet_grid(landmark_set ~ horizon_label)
-  } else {
-    p3 <- p3 + facet_wrap(~ horizon_label)
+    p3 <- p3 + facet_wrap(~ landmark_set, ncol = 2,
+                          labeller = as_labeller(landmark_labels))
   }
 
-  ggsave(file.path(FIGURES_DIR, "fig3_calibration.pdf"), p3, width=10, height=5, dpi=600)
-  ggsave(file.path(FIGURES_DIR, "fig3_calibration.png"), p3, width=10, height=5, dpi=300)
+  ggsave(file.path(FIGURES_DIR, "fig3_calibration.pdf"), p3,
+         width=7.5, height=7, dpi=600)
+  ggsave(file.path(FIGURES_DIR, "fig3_calibration.png"), p3,
+         width=7.5, height=7, dpi=300)
 }
 
-# ── 8. Figure 4: SILK registration — estimated shifts ───────────────────────
-shift_file <- file.path(RESULTS_DIR, "macs_silk_shifts.csv")
-if (file.exists(shift_file)) {
-  cat("\nUsing existing full-data SILK shifts for visualization...\n")
-  shift_df <- read.csv(shift_file, stringsAsFactors = FALSE)
-} else {
-  cat("\nRunning full-data SILK registration for shift visualization...\n")
-  visits_full <- macs_to_silk_visits(read.csv(file.path(DATA_DIR, "macs_visits.csv")))
-  full_grid   <- seq(MACS_SHIFT_RANGE[1], MACS_SHIFT_RANGE[2],
-                     by = silk_opt("SHIFT_GRID_STEP"))
-  kernel_config <- SILK:::registration_kernel_config(
-    kernel = silk_opt("REGISTRATION_KERNEL"),
-    approximation = silk_opt("REGISTRATION_KERNEL_APPROX"),
-    rff_dim = silk_opt("KERNEL_RFF_DIM"),
-    rff_seed = silk_opt("KERNEL_RFF_SEED")
-  )
-  cat("  Kernel:", kernel_config$kernel,
-      "| approximation:", kernel_config$approximation,
-      "| RFF dim:", kernel_config$rff_dim, "\n")
-
-  full_reg <- tryCatch(
-    SILK:::fit_registration_multistart(visits_full, subjects, feature_type = "silk",
-                                 grid = full_grid, seed = 42L,
-                                 kernel_config = kernel_config),
-    error = function(e) { cat("Registration failed:", conditionMessage(e), "\n"); NULL }
-  )
-  shift_df <- NULL
-  if (!is.null(full_reg)) {
-    shift_df <- data.frame(id = full_reg$ids, e_hat = full_reg$e_train)
-    shift_df <- merge(shift_df, subjects[, c("id","A_obs")], by = "id")
-    shift_df$S_hat <- shift_df$A_obs - shift_df$e_hat
-    write.csv(shift_df, shift_file, row.names=FALSE)
-  }
-}
-
-if (!is.null(shift_df)) {
-
-  p4a <- ggplot(shift_df, aes(x = e_hat)) +
-    geom_histogram(fill = UIUC_ORANGE, color = "white", bins = 40, alpha = 0.85) +
-    geom_vline(xintercept = 0, linetype = "dashed", color = "grey30") +
-    labs(x = expression(hat(epsilon)[i] ~ "(estimated origin shift, years)"),
-         y = "Count",
-         title = "SILK-Estimated Origin Shifts",
-         subtitle = "MACS PDS — 573 seroconverters") +
-    theme_minimal(base_size = 14)
-
-  p4b <- ggplot(shift_df, aes(x = A_obs, y = S_hat)) +
-    geom_point(alpha = 0.4, size = 1.5, color = UIUC_BLUE) +
-    geom_abline(slope=1, intercept=0, linetype="dashed", color="grey40") +
-    labs(x = "Observed Landmark Age (years since SC midpoint)",
-         y = "SILK-Calibrated Landmark Age (years)",
-         title = "Observed vs SILK-Calibrated Landmark Ages") +
-    theme_minimal(base_size = 14)
-
-  ggsave(file.path(FIGURES_DIR, "fig4a_shift_distribution.pdf"), p4a, width=7, height=4.5, dpi=600)
-  ggsave(file.path(FIGURES_DIR, "fig4a_shift_distribution.png"), p4a, width=7, height=4.5, dpi=300)
-  ggsave(file.path(FIGURES_DIR, "fig4b_calibrated_landmark.pdf"), p4b, width=6, height=5.5, dpi=600)
-  ggsave(file.path(FIGURES_DIR, "fig4b_calibrated_landmark.png"), p4b, width=6, height=5.5, dpi=300)
-}
-
-# ── 9. Figure 5: KM by SILK risk group ──────────────────────────────────────
+# ── 8. Figure 4: KM by SILK risk group ──────────────────────────────────────
 target_h  <- max(HORIZONS)
-silk_pred <- pred_eval[pred_eval$method == "SILK" &
+silk_pred <- pred_eval[pred_eval$method == "SILK-Cox" &
                        pred_eval$horizon == target_h, ]
 if (nrow(silk_pred) && length(unique(silk_pred$landmark_set)) > 1L) {
-  preferred_landmark <- if ("fixed_5" %in% silk_pred$landmark_set) "fixed_5" else
+  preferred_landmark <- if ("fixed_5y" %in% silk_pred$landmark_set) "fixed_5y" else
     tail(sort(unique(silk_pred$landmark_set)), 1)
   silk_pred <- silk_pred[silk_pred$landmark_set == preferred_landmark, ]
 }
@@ -403,16 +429,18 @@ if (nrow(silk_pred) > 30) {
   km_fit  <- survival::survfit(survival::Surv(U, delta) ~ risk_group, data = km_data)
 
   for (ext in c("pdf", "png")) {
-    if (ext == "pdf") pdf(file.path(FIGURES_DIR, "fig5_km_risk_strata.pdf"), width=8, height=6)
-    else png(file.path(FIGURES_DIR, "fig5_km_risk_strata.png"), width=8, height=6, units="in", res=300)
+    if (ext == "pdf") pdf(file.path(FIGURES_DIR, "fig4_km_risk_strata.pdf"), width=8, height=6)
+    else png(file.path(FIGURES_DIR, "fig4_km_risk_strata.png"), width=8, height=6, units="in", res=300)
     par(mar = c(5, 4.5, 3, 1))
-    plot(km_fit, col = c(UIUC_BLUE, "grey50", UIUC_ORANGE), lwd = 2,
-         xlab = "Time from Landmark (years)",
-         ylab = "AIDS-Free Survival Probability",
-         main = "Kaplan-Meier by SILK Risk Group",
+    plot(km_fit, col = rep(UIUC_BLUE, 3),
+         lty = c("dotted", "dashed", "solid"), lwd = c(1.5, 1.8, 2.2),
+         xlab = "Time from landmark (years)",
+         ylab = "AIDS-free survival probability",
+         main = "AIDS-Free Survival by SILK-Cox Risk Group",
          xlim = c(0, min(10, max(km_data$U))))
     legend("bottomleft", legend = levels(km_data$risk_group),
-           col = c(UIUC_BLUE, "grey50", UIUC_ORANGE), lwd = 2, bty = "n")
+           col = rep(UIUC_BLUE, 3), lty = c("dotted", "dashed", "solid"),
+           lwd = c(1.5, 1.8, 2.2), bty = "n")
     dev.off()
   }
 
@@ -421,13 +449,13 @@ if (nrow(silk_pred) > 30) {
   print(lr)
 }
 
-# ── 10. Final report ────────────────────────────────────────────────────────
+# ── 9. Final report ─────────────────────────────────────────────────────────
 cat("\n====================================================================\n")
 cat("  MACS PDS Real-Data Analysis — Results Summary\n")
 cat("====================================================================\n")
 cat("\nData: 573 HIV seroconverters, 10,602 visits, 228 AIDS events (39.8%)\n")
 cat("Design: fixed-landmark 5-fold cross-validation\n")
-cat("Biomarkers: CD4 (LEU3N), CD4% (LEU3P), CD8 (LEU2N), log10(VL)\n\n")
+cat("Biomarkers: CD4 (LEU3N), CD4% (LEU3P), and CD8 (LEU2N)\n\n")
 
 for (landmark_set in sort(unique(metrics$landmark_set))) {
   cat(sprintf("  Landmark = %s:\n", landmark_set))

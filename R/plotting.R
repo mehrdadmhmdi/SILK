@@ -3,6 +3,9 @@
 # Visualization functions (from plotting_prediction.R)
 # =============================================================================
 
+UIUC_ORANGE_HEX <- "#FF5F05"
+UIUC_BLUE_HEX <- "#13294B"
+
 #' Method color palette
 #'
 #' Returns a named vector of colors for each method, suitable for ggplot2 scales.
@@ -11,29 +14,53 @@
 #' @export
 method_palette <- function() {
   METHOD_ORDER <- silk_opt("METHOD_ORDER")
-  UIUC_ORANGE <- silk_opt("UIUC_ORANGE")
-  UIUC_BLUE <- silk_opt("UIUC_BLUE")
+  UIUC_ORANGE <- UIUC_ORANGE_HEX
+  UIUC_BLUE <- UIUC_BLUE_HEX
   method_colours <- c(
-    "Landmark-Recorded" = "#3B7A57",
-    "Cox-SameFeature-Recorded" = "#2E8B57",
-    "MMLM-Recorded" = "#9467BD",
-    "JM-Recorded" = "#8C564B",
-    "DeepSurv-Observed" = "#E377C2",
-    "RSF-Observed" = "#17BECF",
-    "TimeError-Integrated-Landmark" = "#2B8CBE",
-    "SILK-MeanReg" = "#FDB863",
-    SILK = UIUC_ORANGE,
-    "SILK-Laplace" = "#D95F02",
-    "SILK-Matern32" = "#E6AB02",
-    "Cox-History-Recorded" = "#66A61E",
-    "SILK-History" = "#E7298A",
-    "Beran-Recorded" = "#A6CEE3",
-    "Beran-SILK" = "#FB9A99",
-    "Beran-Oracle-Latent-Age" = "#6A3D9A",
-    "Oracle-Latent-Age" = UIUC_BLUE
+    "Landmark-Recorded" = "#FCB316",                 # Harvest
+    "Cox-SameFeature-Recorded" = "#707372",          # Storm (diagnostic)
+    "MMLM-Recorded" = "#007E8E",                     # Patina
+    "JM-Recorded" = "#5C0E41",                       # Berry
+    "DeepSurv-Observed" = "#006230",                  # Prairie
+    "RSF-Observed" = "#1D58A7",                       # Industrial
+    "TimeError-Integrated-Landmark" = "#7D3E13",     # Earth
+    "SILK-MeanReg" = UIUC_BLUE,
+    SILK = UIUC_BLUE,                                   # diagnostic, not reported
+    "SILK-Laplace" = UIUC_BLUE,
+    "SILK-Matern32" = UIUC_BLUE,
+    "Cox-History-Recorded" = UIUC_BLUE,
+    "SILK-History" = UIUC_ORANGE,
+    "SILK-History-Laplace" = UIUC_ORANGE,
+    "SILK-History-Matern32" = UIUC_ORANGE,
+    "Oracle-History-Latent-Age" = "#000000",
+    "Beran-Recorded" = "#8E9090",                    # Storm 60
+    "Beran-SILK" = UIUC_ORANGE,
+    "Beran-Oracle-Latent-Age" = "#707372",           # Storm
+    "Oracle-Latent-Age" = "#000000"
   )
   labels <- pretty_method(METHOD_ORDER)
   stats::setNames(unname(method_colours[METHOD_ORDER]), labels)
+}
+
+#' @keywords internal
+method_linetype_palette <- function() {
+  ids <- silk_opt("METHOD_ORDER")
+  styles <- stats::setNames(rep("solid", length(ids)), ids)
+  styles[c("SILK-History-Laplace", "SILK-Laplace")] <- "dashed"
+  styles[c("SILK-History-Matern32", "SILK-Matern32")] <- "dotted"
+  styles[c("Beran-SILK")] <- "dotdash"
+  styles[c("Oracle-History-Latent-Age", "Oracle-Latent-Age",
+           "Beran-Oracle-Latent-Age")] <- "longdash"
+  stats::setNames(unname(styles[ids]), pretty_method(ids))
+}
+
+#' @keywords internal
+report_method_ids <- function() {
+  setdiff(
+    silk_opt("METHOD_ORDER"),
+    c("Cox-SameFeature-Recorded", "SILK", "SILK-Laplace",
+      "SILK-Matern32", "Oracle-Latent-Age")
+  )
 }
 
 #' @keywords internal
@@ -79,7 +106,16 @@ add_method_columns <- function(df, method_col = "method") {
   if (!method_col %in% names(df)) return(df)
   df <- df[df[[method_col]] %in% METHOD_ORDER, , drop = FALSE]
   label_col <- if (method_col == "method") "method_label" else paste0(method_col, "_label")
-  df[[label_col]] <- factor(pretty_method(df[[method_col]]), levels = pretty_method(METHOD_ORDER))
+  method_levels <- pretty_method(METHOD_ORDER)
+  duplicated_levels <- unique(method_levels[duplicated(method_levels)])
+  if (length(duplicated_levels)) {
+    stop(
+      "Configured method display labels must be unique; duplicated: ",
+      paste(duplicated_levels, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  df[[label_col]] <- factor(pretty_method(df[[method_col]]), levels = method_levels)
   df
 }
 
@@ -95,7 +131,7 @@ theme_silk <- function(base_size = NULL) {
     stop("ggplot2 is required for theme_silk", call. = FALSE)
   }
   if (is.null(base_size)) base_size <- silk_opt("FIGURE_BASE_SIZE")
-  UIUC_BLUE <- silk_opt("UIUC_BLUE")
+  UIUC_BLUE <- UIUC_BLUE_HEX
   ggplot2::theme_bw(base_size = base_size) +
     ggplot2::theme(
       plot.title = ggplot2::element_text(face = "bold", colour = UIUC_BLUE, size = base_size + 4),
@@ -103,7 +139,7 @@ theme_silk <- function(base_size = NULL) {
       axis.title = ggplot2::element_text(size = base_size),
       axis.text = ggplot2::element_text(size = base_size - 2),
       strip.text = ggplot2::element_text(face = "bold", size = base_size - 2, colour = UIUC_BLUE),
-      strip.background = ggplot2::element_rect(fill = "#F2F2F2", colour = "#B8B8B8"),
+      strip.background = ggplot2::element_rect(fill = "#C6C7C6", colour = "#8E9090"),
       legend.title = ggplot2::element_text(size = base_size - 1),
       legend.text = ggplot2::element_text(size = base_size - 2),
       panel.grid.minor = ggplot2::element_blank()
@@ -214,8 +250,9 @@ add_scenario_plot_label <- function(df) {
 save_calibration_bias_plot <- function(ms, fig_pred_dir, src_dir, phase, setting,
                                        name, subtitle, width, height) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) return(invisible(FALSE))
-  UIUC_BLUE <- silk_opt("UIUC_BLUE")
+  UIUC_BLUE <- UIUC_BLUE_HEX
   z <- design_subset(ms, phase, setting)
+  z <- z[z$method %in% report_method_ids(), , drop = FALSE]
   z <- z[is.finite(z$calibration_in_large_mean), , drop = FALSE]
   if (!nrow(z)) return(invisible(FALSE))
 
@@ -233,20 +270,23 @@ save_calibration_bias_plot <- function(ms, fig_pred_dir, src_dir, phase, setting
   p <- ggplot2::ggplot(
     cal_source,
     ggplot2::aes(x = .data$scenario_plot, y = .data$calibration_in_large,
-                 colour = .data$method_label, group = .data$method_label)
+                 colour = .data$method_label, linetype = .data$method_label,
+                 group = .data$method_label)
   ) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", colour = UIUC_BLUE, linewidth = 0.6) +
     ggplot2::geom_line(linewidth = 0.72, alpha = 0.86) +
     ggplot2::geom_point(size = 2.15, alpha = 0.9) +
     ggplot2::facet_wrap(~ setting_label, ncol = 1) +
     ggplot2::scale_x_discrete(drop = FALSE) +
-    ggplot2::scale_colour_manual(values = method_palette(), drop = FALSE) +
+    ggplot2::scale_colour_manual(values = method_palette(), drop = TRUE) +
+    ggplot2::scale_linetype_manual(values = method_linetype_palette(), drop = TRUE) +
     ggplot2::labs(
       title = "Calibration Bias Across Error Scenarios",
       subtitle = subtitle,
       x = "Error Scenario",
       y = "Observed Minus Predicted Risk",
-      colour = "Method"
+      colour = "Method",
+      linetype = "Method"
     ) +
     theme_silk(base_size = 13) +
     ggplot2::theme(
@@ -262,7 +302,7 @@ save_paired_difference_plot <- function(paired, fig_pred_dir, src_dir, phase, se
                                         name, subtitle, width, height) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) return(invisible(FALSE))
   METHOD_ORDER <- silk_opt("METHOD_ORDER")
-  UIUC_BLUE <- silk_opt("UIUC_BLUE")
+  UIUC_BLUE <- UIUC_BLUE_HEX
 
   z <- paired[
     paired$metric %in% c("integrated_brier_score", "mean_auc") &
@@ -322,50 +362,56 @@ save_paired_difference_plot <- function(paired, fig_pred_dir, src_dir, phase, se
 }
 
 #' @keywords internal
-save_oracle_gap_plot <- function(ms, fig_pred_dir, src_dir, phase, setting,
-                                 name, subtitle, width, height) {
+save_absolute_performance_plot <- function(ms, fig_pred_dir, src_dir, phase, setting,
+                                           name, subtitle, width, height) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) return(invisible(FALSE))
-  UIUC_BLUE <- silk_opt("UIUC_BLUE")
+  z <- design_subset(ms, phase, setting)
+  z <- z[z$method %in% report_method_ids(), , drop = FALSE]
+  if (!nrow(z)) return(invisible(FALSE))
 
-  oracle <- ms[
-    ms$method == "Oracle-Latent-Age",
-    c("time_grid_setting", "n_train_setting", "integrated_brier_score_mean"),
-    drop = FALSE
-  ]
-  names(oracle)[3] <- "oracle_ibs"
-  gap <- merge(ms, oracle, by = c("time_grid_setting", "n_train_setting"))
-  gap <- gap[gap$method != "Oracle-Latent-Age", , drop = FALSE]
-  gap <- design_subset(gap, phase, setting)
-  gap$ibs_gap_to_oracle <- gap$integrated_brier_score_mean - gap$oracle_ibs
-  gap <- gap[is.finite(gap$ibs_gap_to_oracle), , drop = FALSE]
-  if (!nrow(gap)) return(invisible(FALSE))
+  ibs <- z[, c("scenario", "scenario_short", "method", "method_label",
+               "setting_label", "integrated_brier_score_mean"), drop = FALSE]
+  names(ibs)[6] <- "performance"
+  ibs$metric_label <- "Integrated Brier score (lower is better)"
+  auc <- z[, c("scenario", "scenario_short", "method", "method_label",
+               "setting_label", "mean_auc_mean"), drop = FALSE]
+  names(auc)[6] <- "performance"
+  auc$metric_label <- "Mean AUC (higher is better)"
+  absolute <- rbind(ibs, auc)
+  absolute <- absolute[is.finite(absolute$performance), , drop = FALSE]
+  if (!nrow(absolute)) return(invisible(FALSE))
 
-  gap_source <- stats::aggregate(
-    ibs_gap_to_oracle ~ scenario + scenario_short + method + method_label + setting_label,
-    data = gap,
+  absolute_source <- stats::aggregate(
+    performance ~ scenario + scenario_short + method + method_label + metric_label + setting_label,
+    data = absolute,
     FUN = function(x) mean(x, na.rm = TRUE)
   )
-  if (!nrow(gap_source)) return(invisible(FALSE))
-  gap_source <- add_scenario_plot_label(gap_source)
-  utils::write.csv(gap_source, file.path(src_dir, paste0(name, ".csv")), row.names = FALSE)
+  if (!nrow(absolute_source)) return(invisible(FALSE))
+  absolute_source <- add_scenario_plot_label(absolute_source)
+  absolute_source$panel_label <- paste(
+    absolute_source$setting_label, absolute_source$metric_label, sep = "\n"
+  )
+  utils::write.csv(absolute_source, file.path(src_dir, paste0(name, ".csv")), row.names = FALSE)
 
   p <- ggplot2::ggplot(
-    gap_source,
-    ggplot2::aes(x = .data$scenario_plot, y = .data$ibs_gap_to_oracle,
-                 colour = .data$method_label, group = .data$method_label)
+    absolute_source,
+    ggplot2::aes(x = .data$scenario_plot, y = .data$performance,
+                  colour = .data$method_label, linetype = .data$method_label,
+                  group = .data$method_label)
   ) +
-    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", colour = UIUC_BLUE, linewidth = 0.6) +
     ggplot2::geom_line(linewidth = 0.72, alpha = 0.86) +
     ggplot2::geom_point(size = 2.1, alpha = 0.9) +
-    ggplot2::facet_wrap(~ setting_label, ncol = 1) +
+    ggplot2::facet_wrap(~ panel_label, ncol = 2, scales = "free_y") +
     ggplot2::scale_x_discrete(drop = FALSE) +
     ggplot2::scale_colour_manual(values = method_palette(), drop = TRUE) +
+    ggplot2::scale_linetype_manual(values = method_linetype_palette(), drop = TRUE) +
     ggplot2::labs(
-      title = "Distance From The Latent-Age Oracle",
+      title = "Absolute Prediction Performance",
       subtitle = subtitle,
       x = "Error Scenario",
-      y = "IBS Gap To Latent-Age Oracle",
-      colour = "Method"
+      y = "Absolute metric value",
+      colour = "Method",
+      linetype = "Method"
     ) +
     theme_silk(base_size = 13) +
     ggplot2::theme(
@@ -435,8 +481,8 @@ make_dgm_plots <- function(out_dir, src_dir) {
 
   SCENARIO_ERROR_ORDER <- silk_opt("SCENARIO_ERROR_ORDER")
   SCENARIOS <- silk_opt("SCENARIOS")
-  UIUC_ORANGE <- silk_opt("UIUC_ORANGE")
-  UIUC_BLUE <- silk_opt("UIUC_BLUE")
+  UIUC_ORANGE <- UIUC_ORANGE_HEX
+  UIUC_BLUE <- UIUC_BLUE_HEX
 
   dgm_dir <- file.path(out_dir, "figures", "dgm")
   dir.create(dgm_dir, recursive = TRUE, showWarnings = FALSE)
@@ -449,7 +495,8 @@ make_dgm_plots <- function(out_dir, src_dir) {
 
   p_eps <- ggplot2::ggplot(subjects, ggplot2::aes(x = .data$scenario_axis, y = .data$eps)) +
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed", colour = UIUC_BLUE, linewidth = 0.6) +
-    ggplot2::geom_violin(fill = "#F9D2BA", colour = UIUC_ORANGE, linewidth = 0.5, trim = FALSE) +
+    ggplot2::geom_violin(fill = UIUC_ORANGE, colour = UIUC_ORANGE,
+                         alpha = 0.22, linewidth = 0.5, trim = FALSE) +
     ggplot2::geom_boxplot(width = 0.16, outlier.alpha = 0.08, fill = "white", colour = UIUC_BLUE) +
     ggplot2::labs(
       title = "Origin-Error Scenarios In The Initial Data",
@@ -467,11 +514,18 @@ make_dgm_plots <- function(out_dir, src_dir) {
     SCENARIO_ERROR_ORDER
   )
   latent_obs <- subjects[subjects$scenario %in% key_scenarios, , drop = FALSE]
+  latent_label_levels <- wrap_labels(pretty_scenario(key_scenarios), width = 28)
+  latent_obs$scenario_label <- factor(
+    wrap_labels(latent_obs$scenario_label, width = 28),
+    levels = latent_label_levels
+  )
   p_latent <- ggplot2::ggplot(latent_obs, ggplot2::aes(x = .data$A_star, y = .data$A_obs)) +
     ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = UIUC_BLUE, linewidth = 0.7) +
     ggplot2::geom_point(colour = UIUC_ORANGE, alpha = 0.22, size = 1.0) +
     ggplot2::facet_wrap(~ scenario_label, ncol = 3) +
-    ggplot2::coord_equal() +
+    # A fixed 1:1 panel aspect collapses each facet because recorded ages span
+    # a much wider range than latent ages in the severe-error scenarios.
+    ggplot2::coord_cartesian(clip = "on") +
     ggplot2::labs(
       title = "Recorded Versus Latent Landmark Age",
       subtitle = "The Diagonal Is The No-Error Target; Vertical Displacement Is The Origin-Time Shift",
@@ -623,40 +677,19 @@ make_prediction_plots <- function(out_dir) {
       subtitle = "Timepoint Design: N = 400, With Scenarios Shown Separately For Each Visit Schedule.",
       width = 16, height = 17
     )
-    save_oracle_gap_plot(
+    save_absolute_performance_plot(
       ms, fig_pred_dir, src_dir,
       phase = "primary", setting = "n_train",
-      name = "PRED07A_gap_to_latent_oracle_by_error_scenario_ntrain",
-      subtitle = "Primary Design: Integrated Brier Score Gap By Training-Set Size.",
-      width = 16, height = 12
+      name = "PRED05A_absolute_performance_by_error_scenario_ntrain",
+      subtitle = "Primary Design: Absolute IBS And AUC By Training-Set Size, Including Oracle Models.",
+      width = 18, height = 14
     )
-    save_oracle_gap_plot(
+    save_absolute_performance_plot(
       ms, fig_pred_dir, src_dir,
       phase = "timepoint_extension", setting = "schedule",
-      name = "PRED07B_gap_to_latent_oracle_by_error_scenario_timepoints",
-      subtitle = "Timepoint Design: N = 400, With Integrated Brier Score Gap By Visit Schedule.",
-      width = 16, height = 17
-    )
-  }
-
-  paired <- data.frame()
-  if (file.exists(paired_file)) {
-    paired <- utils::read.csv(paired_file, stringsAsFactors = FALSE)
-    paired <- add_time_grid_columns(paired)
-
-    save_paired_difference_plot(
-      paired, fig_pred_dir, src_dir,
-      phase = "primary", setting = "n_train",
-      name = "PRED06A_silk_minus_comparator_by_error_scenario_ntrain",
-      subtitle = "Primary Design: Brier Differences Below Zero Favor SILK; AUC Differences Above Zero Favor SILK.",
-      width = 18, height = 12
-    )
-    save_paired_difference_plot(
-      paired, fig_pred_dir, src_dir,
-      phase = "timepoint_extension", setting = "schedule",
-      name = "PRED06B_silk_minus_comparator_by_error_scenario_timepoints",
-      subtitle = "Timepoint Design With N = 400: Brier Differences Below Zero Favor SILK; AUC Differences Above Zero Favor SILK.",
-      width = 18, height = 16
+      name = "PRED05B_absolute_performance_by_error_scenario_timepoints",
+      subtitle = "Timepoint Design: N = 400, Absolute IBS And AUC By Visit Schedule, Including Oracle Models.",
+      width = 18, height = 20
     )
   }
 

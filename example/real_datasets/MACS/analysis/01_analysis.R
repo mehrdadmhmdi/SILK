@@ -1,9 +1,7 @@
 # =============================================================================
 # 01_analysis.R
-# 5-fold CV risk prediction on MACS PDS: SILK vs Landmark Cox vs MMLM
+# Final fixed-landmark CV analysis of the MACS PDS
 # =============================================================================
-library(SILK)
-
 
 macs_current_script_dir <- function(default = getwd()) {
   frames <- sys.frames()
@@ -36,6 +34,17 @@ visits_raw   <- read.csv(file.path(DATA_DIR, "macs_visits.csv"))
 subjects <- macs_to_silk_subjects(subjects_raw)
 visits   <- macs_to_silk_visits(visits_raw)
 
+# The final primary analysis excludes the historically imputed viral-load
+# series. The retained immunologic markers are complete and therefore require
+# no imputation before a landmark.
+non_biomarker_columns <- setdiff(names(visits), bio_columns(visits))
+missing_primary <- setdiff(MACS_PRIMARY_BIOMARKERS, names(visits))
+if (length(missing_primary)) {
+  stop("Missing primary biomarkers: ", paste(missing_primary, collapse = ", "),
+       call. = FALSE)
+}
+visits <- visits[, c(non_biomarker_columns, MACS_PRIMARY_BIOMARKERS), drop = FALSE]
+
 cat("MACS PDS data loaded:\n")
 cat("  Subjects:", nrow(subjects), "\n")
 cat("  Visits:  ", nrow(visits), "\n")
@@ -55,6 +64,13 @@ real_prediction_frame <- function(test_subjects, landmark, horizons,
   n <- nrow(test_subjects)
   H <- length(horizons)
   risk_mat <- as.matrix(risk_mat)
+  if (!identical(dim(risk_mat), c(n, H))) {
+    stop("Risk predictions have the wrong subject-by-horizon dimensions.",
+         call. = FALSE)
+  }
+  if (any(!is.finite(risk_mat))) {
+    stop("Risk prediction returned missing or non-finite values.", call. = FALSE)
+  }
   rows <- list()
   rr <- 1L
 
@@ -65,7 +81,7 @@ real_prediction_frame <- function(test_subjects, landmark, horizons,
       tau <- horizons[h]
       if (delta_i == 1 && U_i <= tau) {
         event_wh <- 1L; at_risk <- TRUE
-      } else if (delta_i == 0 && U_i < tau) {
+      } else if (delta_i == 0 && U_i <= tau) {
         event_wh <- 0L; at_risk <- FALSE   # censored before horizon
       } else {
         event_wh <- 0L; at_risk <- TRUE
@@ -89,98 +105,133 @@ real_prediction_frame <- function(test_subjects, landmark, horizons,
 
 # ── 3. Cross-validation ─────────────────────────────────────────────────────
 set.seed(2024)
-K           <- 5L
+K           <- as.integer(Sys.getenv("MACS_OUTER_FOLDS", unset = "5"))
+if (!is.finite(K) || K < 2L) stop("MACS_OUTER_FOLDS must be at least 2.", call. = FALSE)
 HORIZONS    <- silk_opt("PREDICTION_HORIZONS")
 METHOD_LIST <- silk_opt("METHOD_ORDER")
+method_override <- trimws(Sys.getenv("MACS_METHODS", unset = ""))
+if (nzchar(method_override)) {
+  METHOD_LIST <- trimws(strsplit(method_override, ",", fixed = TRUE)[[1]])
+}
+unknown_methods <- setdiff(METHOD_LIST, silk_opt("METHOD_ORDER"))
+if (length(unknown_methods)) {
+  stop("Unknown MACS_METHODS values: ", paste(unknown_methods, collapse = ", "),
+       call. = FALSE)
+}
+development_override <- nzchar(method_override) ||
+  nzchar(trimws(Sys.getenv("MACS_LANDMARKS", unset = ""))) ||
+  nzchar(trimws(Sys.getenv("MACS_INNER_FOLDS", unset = ""))) ||
+  !identical(K, 5L) || !isTRUE(MACS_USE_FIXED_LANDMARKS)
+if (development_override &&
+    !nzchar(trimws(Sys.getenv("MACS_RESULTS_DIR", unset = "")))) {
+  stop(
+    "Development overrides require an explicit MACS_RESULTS_DIR so that ",
+    "partial runs cannot replace the final MACS results.",
+    call. = FALSE
+  )
+}
 landmark_sets <- macs_landmark_sets(subjects, visits)
 
-# Extract an event-risk vector at target times from a JMbayes2 prediction object
-# (mirrors the simulation's JM-Recorded comparator).
-jm_event_risk <- function(pred, target_times) {
-  if (is.data.frame(pred)) {
-    df <- pred
-  } else if (is.list(pred)) {
-    dfs <- pred[vapply(pred, is.data.frame, logical(1))]
-    if (!length(dfs)) stop("JMbayes2 prediction did not return a data frame.", call. = FALSE)
-    df <- dfs[[1]]
-  } else stop("Unsupported JMbayes2 prediction object.", call. = FALSE)
-  time_col  <- intersect(c("times", "time", "Time", "A_obs_il"), names(df))
-  risk_cols <- grep("risk|event|cif|prob", names(df), ignore.case = TRUE, value = TRUE)
-  risk_cols <- risk_cols[vapply(df[risk_cols], is.numeric, logical(1))]
-  risk_cols <- setdiff(risk_cols, time_col)
-  if (!length(risk_cols)) {
-    num <- names(df)[vapply(df, is.numeric, logical(1))]
-    risk_cols <- setdiff(num, c(time_col, "id", "X1", "X2", "Y_obs", "status", "A_obs_il"))
+make_stratified_folds <- function(subjects, number_folds, seed = 2024L) {
+  set.seed(seed)
+  assignment <- integer(nrow(subjects))
+  for (status in sort(unique(subjects$delta))) {
+    index <- which(subjects$delta == status)
+    index <- sample(index, length(index))
+    assignment[index] <- rep(seq_len(number_folds), length.out = length(index))
   }
-  if (!length(risk_cols)) stop("Could not identify the JMbayes2 event-risk column.", call. = FALSE)
-  risk <- as.numeric(df[[risk_cols[1]]])
-  if (length(time_col)) {
-    tt  <- as.numeric(df[[time_col[1]]])
-    out <- stats::approx(tt, risk, xout = target_times, rule = 2, ties = "ordered")$y
-  } else if (length(risk) >= length(target_times)) {
-    out <- tail(risk, length(target_times))
-  } else stop("JMbayes2 prediction did not include enough event-risk values.", call. = FALSE)
-  pmin(pmax(out, 0), 1)
+  stats::setNames(assignment, subjects$id)
+}
+
+# One subject keeps the same outer fold at every landmark. This preserves the
+# pairing between methods and makes landmark-to-landmark summaries auditable.
+master_folds <- make_stratified_folds(subjects, K, seed = 2024L)
+
+macs_current_marker_matrix <- function(subjects, visits, biomarkers = MACS_PRIMARY_BIOMARKERS) {
+  output <- matrix(NA_real_, nrow = nrow(subjects), ncol = length(biomarkers),
+                   dimnames = list(NULL, paste0("current_", biomarkers)))
+  for (index in seq_len(nrow(subjects))) {
+    subject_visits <- visits[visits$id == subjects$id[index] &
+                               visits$A_obs_il <= subjects$A_obs[index] + 1e-8,
+                             , drop = FALSE]
+    if (!nrow(subject_visits)) next
+    subject_visits <- subject_visits[order(subject_visits$A_obs_il, decreasing = TRUE),
+                                     , drop = FALSE]
+    output[index, ] <- as.numeric(subject_visits[1, biomarkers, drop = TRUE])
+  }
+  output[!is.finite(output)] <- 0
+  output
+}
+
+macs_survival_covariates <- function(subjects, visits, stage,
+                                     marker_matrix = NULL) {
+  if (is.null(marker_matrix)) {
+    marker_matrix <- macs_current_marker_matrix(subjects, visits)
+  }
+  cbind(
+    landmark_age = as.numeric(stage),
+    X1 = as.numeric(subjects$X1),
+    X2 = as.numeric(subjects$X2),
+    marker_matrix
+  )
+}
+
+macs_single_marker_visits <- function(visits, biomarker) {
+  non_biomarkers <- setdiff(names(visits), bio_columns(visits))
+  output <- visits[, c(non_biomarkers, biomarker), drop = FALSE]
+  names(output)[names(output) == biomarker] <- "B1"
+  output
+}
+
+fit_multimarker_mmlm <- function(train_s, train_v) {
+  models <- lapply(MACS_PRIMARY_BIOMARKERS, function(biomarker) {
+    marker_visits <- macs_single_marker_visits(train_v, biomarker)
+    list(
+      biomarker = biomarker,
+      visits_name = "B1",
+      model = SILK:::fit_current_value_mixed_model(train_s, marker_visits)
+    )
+  })
+  marker_matrix <- do.call(cbind, lapply(models, function(component) {
+    marker_visits <- macs_single_marker_visits(train_v, component$biomarker)
+    SILK:::predict_current_value_mixed_model(component$model, train_s, marker_visits)
+  }))
+  colnames(marker_matrix) <- paste0("mmlm_", MACS_PRIMARY_BIOMARKERS)
+  x <- macs_survival_covariates(train_s, train_v, train_s$A_obs, marker_matrix)
+  list(method = "MMLM-Recorded", marker_models = models,
+       fit = fit_residual_cox(train_s, x))
+}
+
+predict_multimarker_mmlm <- function(fit, test_s, test_v) {
+  marker_matrix <- do.call(cbind, lapply(fit$marker_models, function(component) {
+    marker_visits <- macs_single_marker_visits(test_v, component$biomarker)
+    SILK:::predict_current_value_mixed_model(component$model, test_s, marker_visits)
+  }))
+  colnames(marker_matrix) <- paste0("mmlm_", MACS_PRIMARY_BIOMARKERS)
+  macs_survival_covariates(test_s, test_v, test_s$A_obs, marker_matrix)
 }
 
 fit_macs_method <- function(method, train_s, train_v, fold_seed) {
   switch(method,
-    "Landmark-Recorded" = {
-      x <- SILK:::landmark_covariates(train_s, train_v, clock = "recorded",
-                                      include_biomarker = FALSE)
+    "Cox-Recorded-SameFeature" = {
+      x <- macs_survival_covariates(train_s, train_v, train_s$A_obs)
       list(method = method, fit = fit_residual_cox(train_s, x))
     },
-    "MMLM-Recorded" = {
-      mm <- SILK:::fit_current_value_mixed_model(train_s, train_v)
-      mh <- SILK:::predict_current_value_mixed_model(mm, train_s, train_v)
-      x  <- SILK:::landmark_covariates(train_s, train_v, clock = "recorded",
-                                       marker = mh)
-      list(method = method, marker_model = mm, fit = fit_residual_cox(train_s, x))
-    },
-    "JM-Recorded" = {
-      if (!requireNamespace("JMbayes2", quietly = TRUE))
-        stop("JM-Recorded requires the JMbayes2 package.", call. = FALSE)
-      mm <- SILK:::fit_current_value_mixed_model(train_s, train_v)
-      if (is.null(mm$fit))
-        stop("JM-Recorded could not fit the recorded-time longitudinal mixed model.",
-             call. = FALSE)
-      # Absolute event/censoring time on the recorded disease-age clock:
-      # landmark age plus residual follow-up (Y_obs = A_obs + U), status = delta.
-      event_dat <- data.frame(
-        id     = train_s$id,
-        Y_obs  = train_s$A_obs + train_s$U,
-        status = as.integer(train_s$delta),
-        X1     = train_s$X1,
-        X2     = train_s$X2
+    "MMLM-Recorded" = fit_multimarker_mmlm(train_s, train_v),
+    "SILK-Cox" = {
+      registration <- fit_silk_registration(
+        train_s, train_v,
+        shift_range = MACS_SHIFT_RANGE,
+        seed = fold_seed,
+        biomarker_kernel = "gaussian"
       )
-      cox_fit <- survival::coxph(survival::Surv(Y_obs, status) ~ X1 + X2,
-                                 data = event_dat, x = TRUE)
-      jm_fit <- JMbayes2::jm(
-        cox_fit, mm$fit, time_var = "A_obs_il",
-        n_chains = JM_N_CHAINS, n_iter = JM_N_ITER, n_burnin = JM_N_BURNIN
-      )
-      list(method = method, marker_model = mm, cox_fit = cox_fit, jm_fit = jm_fit)
+      stage <- registration$train_stage$S_hat[
+        match(train_s$id, registration$train_stage$id)
+      ]
+      x <- macs_survival_covariates(train_s, train_v, stage)
+      list(method = method, registration = registration,
+           grid = registration$grid, fit = fit_residual_cox(train_s, x))
     },
-    "SILK-LinearMMD" = fit_silk(
-      train_s, train_v,
-      shift_range = MACS_SHIFT_RANGE,
-      feature_type = "silk",
-      method = "SILK-LinearMMD",
-      kernel = "linear",
-      kernel_approx = "exact",
-      seed = fold_seed
-    ),
-    "SILK" = fit_silk(
-      train_s, train_v,
-      shift_range = MACS_SHIFT_RANGE,
-      feature_type = "silk",
-      method = "SILK",
-      kernel = silk_opt("REGISTRATION_KERNEL"),
-      kernel_approx = silk_opt("REGISTRATION_KERNEL_APPROX"),
-      rff_dim = silk_opt("KERNEL_RFF_DIM"),
-      rff_seed = silk_opt("KERNEL_RFF_SEED"),
-      seed = fold_seed
-    ),
     stop("Unknown MACS method: ", method, call. = FALSE)
   )
 }
@@ -204,9 +255,8 @@ silk_diagnostics <- function(fit, ps, fold_id, method, landmark_set, landmark_ti
 
 predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
                                 n_train, landmark_set, landmark_time) {
-  if (identical(method, "Landmark-Recorded")) {
-    x <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded",
-                                    include_biomarker = FALSE)
+  if (identical(method, "Cox-Recorded-SameFeature")) {
+    x <- macs_survival_covariates(test_s, test_v, test_s$A_obs)
     risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
     return(list(
       predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
@@ -216,8 +266,7 @@ predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
     ))
   }
   if (identical(method, "MMLM-Recorded")) {
-    mh <- SILK:::predict_current_value_mixed_model(fit$marker_model, test_s, test_v)
-    x  <- SILK:::landmark_covariates(test_s, test_v, clock = "recorded", marker = mh)
+    x <- predict_multimarker_mmlm(fit, test_s, test_v)
     risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
     return(list(
       predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
@@ -226,40 +275,12 @@ predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
       diagnostics = NULL
     ))
   }
-  if (identical(method, "JM-Recorded")) {
-    b <- fit$marker_model$biomarker
-    risk <- matrix(NA_real_, nrow = nrow(test_s), ncol = length(HORIZONS))
-    for (i in seq_len(nrow(test_s))) {
-      sv <- test_v[test_v$id == test_s$id[i], , drop = FALSE]
-      if (!nrow(sv)) next
-      sv$marker_value <- sv[[b]]
-      sv$id     <- factor(sv$id)
-      sv$Y_obs  <- test_s$A_obs[i]   # alive at the landmark; predict forward
-      sv$status <- 0L
-      sv$X1     <- test_s$X1[i]
-      sv$X2     <- test_s$X2[i]
-      target_times <- test_s$A_obs[i] + HORIZONS
-      pred <- tryCatch(stats::predict(
-        fit$jm_fit, newdata = sv, process = "event", times = target_times,
-        control = list(cores = 1L, n_samples = JM_PRED_N_SAMPLES, return_newdata = TRUE)
-      ), error = function(e) NULL)
-      if (!is.null(pred)) risk[i, ] <- jm_event_risk(pred, target_times)
-    }
-    return(list(
-      predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
-                                          method, fold_id, n_train,
-                                          landmark_set, landmark_time),
-      diagnostics = NULL
-    ))
-  }
-
   grid <- fit$grid
-  ps <- SILK:::predict_registration_shift(fit$registration$final_template, test_v, grid)
+  ps <- predict_silk_registration(fit$registration, test_v, grid)
   stage <- test_s$A_obs[match(ps$id, test_s$id)] - ps$e_hat
   stage <- stage[match(test_s$id, ps$id)]
   ps$S_hat <- test_s$A_obs[match(ps$id, test_s$id)] - ps$e_hat
-  hist <- make_history_features(test_s, test_v)
-  x <- SILK:::silk_history_covariates(test_s, hist, stage)
+  x <- macs_survival_covariates(test_s, test_v, stage)
   risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
   list(
     predictions = real_prediction_frame(test_s, stage, HORIZONS, risk,
@@ -279,9 +300,10 @@ cat("\n=== ", K, "-fold cross-validation ===\n")
 cat("Methods:", paste(METHOD_LIST, collapse = ", "), "\n")
 cat("Landmarks:", paste(names(landmark_sets), collapse = ", "), "\n")
 cat("Horizons:", paste(HORIZONS, collapse = ", "), "years\n\n")
-cat("SILK kernel:", silk_opt("REGISTRATION_KERNEL"),
-    "| approximation:", silk_opt("REGISTRATION_KERNEL_APPROX"),
-    "| RFF dim:", silk_opt("KERNEL_RFF_DIM"), "\n\n")
+cat("SILK biomarker kernel:", silk_opt("BIOMARKER_KERNEL"),
+    "| bandwidth:", silk_opt("BIOMARKER_BANDWIDTH"), "\n")
+cat("Primary biomarkers:", paste(MACS_PRIMARY_BIOMARKERS, collapse = ", "),
+    "(viral load excluded from the primary analysis)\n\n")
 
 for (landmark_set in names(landmark_sets)) {
   ldat <- landmark_sets[[landmark_set]]
@@ -293,8 +315,8 @@ for (landmark_set in names(landmark_sets)) {
     next
   }
   ids <- sort(unique(set_subjects$id))
-  folds <- sample(rep(seq_len(K), length.out = length(ids)))
-  names(folds) <- ids
+  folds <- master_folds[as.character(ids)]
+  if (anyNA(folds)) stop("Outer-fold assignment is missing for a landmark subject.")
   cat("\n── Landmark set:", landmark_set, "subjects:", length(ids), "visits:", nrow(set_visits), "──\n")
 
   for (ff in seq_len(K)) {
@@ -377,12 +399,46 @@ rownames(status_df) <- NULL
 diagnostics <- if (length(all_diagnostics)) do.call(rbind, all_diagnostics) else data.frame()
 if (nrow(diagnostics)) rownames(diagnostics) <- NULL
 
-write.csv(predictions, file.path(RESULTS_DIR, "macs_predictions.csv"),
-          row.names = FALSE)
 write.csv(status_df, file.path(RESULTS_DIR, "macs_method_status.csv"),
           row.names = FALSE)
+if (any(!status_df$fit_ok | !status_df$predict_ok)) {
+  stop(
+    "The final MACS analysis is incomplete. Inspect macs_method_status.csv; ",
+    "macs_predictions.csv was not replaced.",
+    call. = FALSE
+  )
+}
+
+prediction_file <- file.path(RESULTS_DIR, "macs_predictions.csv")
+prediction_temporary <- tempfile("macs_predictions_", tmpdir = RESULTS_DIR,
+                                 fileext = ".csv")
+write.csv(predictions, prediction_temporary, row.names = FALSE)
+if (!file.copy(prediction_temporary, prediction_file, overwrite = TRUE)) {
+  unlink(prediction_temporary)
+  stop("Could not publish the completed MACS prediction file.", call. = FALSE)
+}
+unlink(prediction_temporary)
 write.csv(diagnostics, file.path(RESULTS_DIR, "macs_profile_diagnostics.csv"),
           row.names = FALSE)
+
+analysis_specification <- data.frame(
+  item = c("outer_folds", "fold_seed", "landmarks", "horizons", "methods",
+           "primary_biomarkers", "viral_load_primary", "shift_range",
+           "biomarker_kernel", "biomarker_bandwidth", "shift_ridge"),
+  value = c(
+    K, 2024, paste(MACS_FIXED_LANDMARKS, collapse = ","),
+    paste(HORIZONS, collapse = ","), paste(METHOD_LIST, collapse = ","),
+    paste(MACS_PRIMARY_BIOMARKERS, collapse = ","), "excluded",
+    paste(MACS_SHIFT_RANGE, collapse = ","), silk_opt("BIOMARKER_KERNEL"),
+    silk_opt("BIOMARKER_BANDWIDTH"), silk_opt("SHIFT_RIDGE")
+  ),
+  stringsAsFactors = FALSE
+)
+write.csv(analysis_specification,
+          file.path(RESULTS_DIR, "macs_analysis_specification.csv"),
+          row.names = FALSE)
+writeLines(capture.output(sessionInfo()),
+           file.path(RESULTS_DIR, "macs_session_info.txt"))
 
 cat("=== Cross-validation complete ===\n")
 cat("Predictions:", nrow(predictions), "rows\n")
