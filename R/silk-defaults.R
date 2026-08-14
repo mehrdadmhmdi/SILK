@@ -77,15 +77,23 @@ silk_default_options <- function() {
     PREDICTION_HORIZONS = c(1, 2, 3, 4),
 
     # Biomarker controls
+    # Every simulation scenario uses the same four biomarker channels.
     N_BIO_MEAN = 4L,
-    N_BIO_DIST = 20L,
-    N_BIO_WEAK = 6L,
+    N_BIO_DIST = 4L,
+    N_BIO_WEAK = 4L,
     SIGMA_BIO_MEAN = 0.70,
     SIGMA_BIO_WEAK = 1.25,
     DIST_SD_BASE = 0.45,
     DIST_SD_SLOPE = 0.18,
     DEFAULT_SIGNAL_AMP = 1.35,
     DEFAULT_U_BIO_COEF = 0.15,
+    # Strong observed-covariate effects shared by the biomarker channels.
+    # B1 additionally receives the centered nonlinear term
+    # BIO_BETA_X1_SQ * (X1^2 - 1). X2 is Bernoulli, so X2^2 would equal X2.
+    BIO_BETA_X1 = 0.35,
+    BIO_BETA_X2 = 0.25,
+    BIO_BETA_X1_SQ = 0.50,
+    BIO_NONLINEAR_MARKER = 1L,
 
     # Registration
     SHIFT_GRID_STEP = 0.2,
@@ -204,7 +212,7 @@ silk_default_options <- function() {
         "normal", "normal", "mixture", "mixture", "normal", "mixture",
         "mixture", "mixture", "normal", "t3", "asymmetric", "mixture"
       ),
-      n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
+      n_biomarkers = rep(4L, 12),
       missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
       irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
       shift_min = c(-4, -20, -36, -36, -20, -36, -36, -36, -30, -48, -48, -36),

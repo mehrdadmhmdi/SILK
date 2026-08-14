@@ -89,6 +89,24 @@ sc_val <- function(sc, nm, default) {
 }
 
 #' @keywords internal
+biomarker_covariate_matrix <- function(X1, X2, p) {
+  beta_x1 <- as.numeric(silk_opt("BIO_BETA_X1"))[1L]
+  beta_x2 <- as.numeric(silk_opt("BIO_BETA_X2"))[1L]
+  beta_x1_sq <- as.numeric(silk_opt("BIO_BETA_X1_SQ"))[1L]
+  nonlinear_marker <- as.integer(silk_opt("BIO_NONLINEAR_MARKER"))[1L]
+
+  linear_effect <- beta_x1 * X1 + beta_x2 * X2
+  out <- matrix(linear_effect, nrow = length(X1), ncol = p)
+  if (is.finite(nonlinear_marker) && nonlinear_marker >= 1L && nonlinear_marker <= p) {
+    # X1 ~ N(0,1), so centering X1^2 keeps this term mean zero and prevents a
+    # change in the marginal biomarker intercept. X2 is binary and X2^2 = X2.
+    out[, nonlinear_marker] <- out[, nonlinear_marker] +
+      beta_x1_sq * (X1^2 - 1)
+  }
+  out
+}
+
+#' @keywords internal
 marker_mean_matrix <- function(age, X1, X2, U, p, sc) {
   A_STAR_CENTER <- silk_opt("A_STAR_CENTER")
   DEFAULT_SIGNAL_AMP <- silk_opt("DEFAULT_SIGNAL_AMP")
@@ -101,18 +119,18 @@ marker_mean_matrix <- function(age, X1, X2, U, p, sc) {
   signal <- sc$biomarker_signal[1]
   amp <- sc_val(sc, "signal_amp", if (signal == "weak") 0.12 else DEFAULT_SIGNAL_AMP)
   ucoef <- sc_val(sc, "u_bio_coef", DEFAULT_U_BIO_COEF)
+  covariate_effect <- biomarker_covariate_matrix(X1, X2, p)
 
   base_list <- list(
     2.2 * tanh(z),
     -1.8 * tanh((age - 29) / 2.0),
     1.5 * sin((age - 24) * pi / 8),
-    1.2 * cos((age - 25) * pi / 7),
-    0.35 * (age - A_STAR_CENTER)^2 - 2.0
+    1.2 * cos((age - 25) * pi / 7)
   )
 
   for (k in seq_len(p)) {
     bk <- base_list[[((k - 1L) %% length(base_list)) + 1L]]
-    M[, k] <- amp * bk + 0.18 * X1 + 0.10 * X2 + ucoef * U
+    M[, k] <- amp * bk + covariate_effect[, k] + ucoef * U
   }
   M
 }
@@ -156,7 +174,7 @@ r_biomarkers <- function(age, X1, X2, U, sc, p) {
   } else if (signal == "stage_null") {
     # Prespecified negative control: biomarkers can depend on observed baseline
     # covariates but contain no latent-age, origin-shift, or frailty information.
-    mean_mat <- matrix(0.18 * X1 + 0.10 * X2, nrow = n, ncol = p)
+    mean_mat <- biomarker_covariate_matrix(X1, X2, p)
     out <- mean_mat + matrix(
       stats::rnorm(n * p, sd = sc_val(sc, "sigma_bio", SIGMA_BIO_WEAK)),
       nrow = n

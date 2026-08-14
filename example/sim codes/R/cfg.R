@@ -106,16 +106,32 @@ PREDICTION_HORIZONS <- as.numeric(strsplit(Sys.getenv("SILK_HORIZONS", unset = "
 PREDICTION_HORIZONS <- sort(unique(PREDICTION_HORIZONS[is.finite(PREDICTION_HORIZONS) & PREDICTION_HORIZONS > 0]))
 if (!length(PREDICTION_HORIZONS)) PREDICTION_HORIZONS <- EVAL_HORIZON
 
-# Default biomarker controls; scenario-specific columns override these.
-N_BIO_MEAN <- 4L
-N_BIO_DIST <- 20L
-N_BIO_WEAK <- 6L
+# All scenarios use exactly four biomarker channels. B1 has an additional
+# centered quadratic X1 effect; X2 is binary, so X2^2 would not be nonlinear.
+N_BIOMARKERS <- as.integer(Sys.getenv("SILK_N_BIOMARKERS", unset = "4"))
+if (!is.finite(N_BIOMARKERS) || N_BIOMARKERS < 1L) {
+  stop("SILK_N_BIOMARKERS must be a positive integer.", call. = FALSE)
+}
+N_BIO_MEAN <- N_BIOMARKERS
+N_BIO_DIST <- N_BIOMARKERS
+N_BIO_WEAK <- N_BIOMARKERS
 SIGMA_BIO_MEAN <- 0.70
 SIGMA_BIO_WEAK <- 1.25
 DIST_SD_BASE <- 0.45
 DIST_SD_SLOPE <- 0.18
 DEFAULT_SIGNAL_AMP <- 1.35
 DEFAULT_U_BIO_COEF <- 0.15
+BIO_BETA_X1 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X1", unset = "0.35"))
+BIO_BETA_X2 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X2", unset = "0.25"))
+BIO_BETA_X1_SQ <- as.numeric(Sys.getenv("SILK_BIO_BETA_X1_SQ", unset = "0.50"))
+BIO_NONLINEAR_MARKER <- as.integer(Sys.getenv("SILK_BIO_NONLINEAR_MARKER", unset = "1"))
+if (any(!is.finite(c(BIO_BETA_X1, BIO_BETA_X2, BIO_BETA_X1_SQ)))) {
+  stop("The SILK biomarker-effect coefficients must be finite numbers.", call. = FALSE)
+}
+if (!is.finite(BIO_NONLINEAR_MARKER) ||
+    BIO_NONLINEAR_MARKER < 1L || BIO_NONLINEAR_MARKER > N_BIOMARKERS) {
+  stop("SILK_BIO_NONLINEAR_MARKER must index one of the generated biomarkers.", call. = FALSE)
+}
 
 # ----------------------------- Registration ----------------------------------
 SHIFT_GRID_STEP <- as.numeric(Sys.getenv("SILK_SHIFT_GRID_STEP", unset = "0.2"))
@@ -280,7 +296,7 @@ SCENARIOS <- data.frame(
     "normal", "normal", "mixture", "mixture", "normal", "mixture",
     "mixture", "mixture", "normal", "t3", "asymmetric", "mixture"
   ),
-  n_biomarkers = c(4L, 4L, 4L, 5L, 20L, 20L, 40L, 6L, 4L, 4L, 4L, 4L),
+  n_biomarkers = rep(N_BIOMARKERS, length(SCENARIOS_ALL)),
   missing_rate = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.25),
   irregular = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
   shift_min = c(-4, -20, -36, -36, -20, -36, -36, -36, -30, -48, -48, -36),
@@ -408,6 +424,10 @@ silk_options(
   DIST_SD_SLOPE = DIST_SD_SLOPE,
   DEFAULT_SIGNAL_AMP = DEFAULT_SIGNAL_AMP,
   DEFAULT_U_BIO_COEF = DEFAULT_U_BIO_COEF,
+  BIO_BETA_X1 = BIO_BETA_X1,
+  BIO_BETA_X2 = BIO_BETA_X2,
+  BIO_BETA_X1_SQ = BIO_BETA_X1_SQ,
+  BIO_NONLINEAR_MARKER = BIO_NONLINEAR_MARKER,
   SHIFT_GRID_STEP = SHIFT_GRID_STEP,
   DEFAULT_SHIFT_GRID_MIN = DEFAULT_SHIFT_GRID_MIN,
   DEFAULT_SHIFT_GRID_MAX = DEFAULT_SHIFT_GRID_MAX,

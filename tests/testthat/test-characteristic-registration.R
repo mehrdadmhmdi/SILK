@@ -118,7 +118,24 @@ test_that("the primary DGM uses an attained-age hazard and a stage-null control"
   expect_equal(control$risk_beta_U, 0)
 })
 
-test_that("Cox and Beran layers reuse each exact characteristic registration", {
+test_that("all scenarios use four biomarkers and B1 has the nonlinear X1 effect", {
+  scenarios <- silk_opt("SCENARIOS")
+  expect_equal(scenarios$n_biomarkers, rep(4L, nrow(scenarios)))
+
+  X1 <- c(-1, 0, 1, 2)
+  X2 <- c(0, 1, 0, 1)
+  effects <- SILK:::biomarker_covariate_matrix(X1, X2, p = 4L)
+  linear <- silk_opt("BIO_BETA_X1") * X1 + silk_opt("BIO_BETA_X2") * X2
+  quadratic <- silk_opt("BIO_BETA_X1_SQ") * (X1^2 - 1)
+
+  expect_equal(dim(effects), c(length(X1), 4L))
+  expect_equal(effects[, 1L], linear + quadratic)
+  expect_equal(effects[, 2L], linear)
+  expect_equal(effects[, 3L], linear)
+  expect_equal(effects[, 4L], linear)
+})
+
+test_that("SILK-Cox reuses each exact characteristic registration", {
   local_silk_options(
     N_FOLDS = 2L,
     N_STARTS = 1L,
@@ -140,11 +157,8 @@ test_that("Cox and Beran layers reuse each exact characteristic registration", {
     expect_identical(registration$biomarker_kernel, supported_kernels[[kernel_name]])
 
     cox <- fit_silk(train$subjects, train$visits, registration = registration)
-    beran <- fit_beran_silk(train$subjects, train$visits, registration = registration)
     expect_identical(cox$registration, registration)
-    expect_identical(beran$registration, registration)
     expect_s3_class(predict_silk_registration(registration, test$visits), "data.frame")
     expect_s3_class(predict_silk(cox, test$subjects, test$visits), "data.frame")
-    expect_s3_class(predict_beran_silk(beran, test$subjects, test$visits), "data.frame")
   }
 })

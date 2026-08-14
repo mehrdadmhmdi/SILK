@@ -104,6 +104,8 @@ echo "  profile search rad.: $SILK_PROFILE_SEARCH_RADIUS"
 echo "  alt local radius:    $SILK_ALT_LOCAL_RADIUS"
 echo "  registration starts: $SILK_N_STARTS"
 echo "  bandwidth scale:     $SILK_BIOMARKER_BW_SCALE"
+echo "  biomarker count:     $SILK_N_BIOMARKERS"
+echo "  biomarker X effects: X1=$SILK_BIO_BETA_X1, X2=$SILK_BIO_BETA_X2, X1^2=$SILK_BIO_BETA_X1_SQ on B$SILK_BIO_NONLINEAR_MARKER"
 
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
 if [[ "$SILK_RUN_STAGE" != "confirmatory" ]]; then
@@ -118,6 +120,11 @@ run_stage=$SILK_RUN_STAGE
 n_rep=$SILK_N_REP
 n_train_grid=$SILK_N_TRAIN_GRID
 n_test=$SILK_N_TEST
+biomarker_count=$SILK_N_BIOMARKERS
+biomarker_beta_x1=$SILK_BIO_BETA_X1
+biomarker_beta_x2=$SILK_BIO_BETA_X2
+biomarker_beta_x1_sq=$SILK_BIO_BETA_X1_SQ
+biomarker_nonlinear_marker=$SILK_BIO_NONLINEAR_MARKER
 design_phases=${SILK_DESIGN_PHASES:-primary,timepoint_extension}
 forced_schedule=${SILK_FORCE_SCHEDULE:-none}
 kernels=$SILK_BIOMARKER_KERNELS
