@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --account=bfez-delta-cpu
 #SBATCH --partition=cpu
+#SBATCH --output=logs/%x-%A_%a.log
 
 set -euo pipefail
 

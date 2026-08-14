@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
 #SBATCH --time=02:00:00
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/%x-%j.log
 
 set -euo pipefail
 
@@ -73,14 +73,14 @@ array_job="$(sbatch --parsable \
   --mem=16G \
   --time=02:00:00 \
   --array="1-${n_tasks}" \
-  --output="$SILK_OUT_DIR/logs/%x-%A_%a.out" \
+  --output="$SILK_OUT_DIR/logs/%x-%A_%a.log" \
   --export="ALL,SILK_RESOURCE_CLASS=failed-comparators,SILK_TASK_LIST_FILE=${TASK_LIST}" \
   "$SIM_DIR/job_array_worker.sh")"
 
 check_job="$(sbatch --parsable \
   --dependency="afterany:${array_job}" \
   --export=ALL \
-  --output="$SILK_OUT_DIR/logs/%x-%j.out" \
+  --output="$SILK_OUT_DIR/logs/%x-%j.log" \
   "$SIM_DIR/job_failed_comparators_check.sbatch")"
 
 echo "Submitted repair array: $array_job ($n_tasks tasks, no user throttle)"

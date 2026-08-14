@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=02:00:00
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/%x-%j.log
 
 set -euo pipefail
 

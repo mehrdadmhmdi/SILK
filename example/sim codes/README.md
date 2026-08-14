@@ -89,6 +89,11 @@ module load slurm-env/0.1
 module load cray-R/4.4.0
 ```
 
+Top-level submission logs are always written as `logs/<job-name>-<job-id>.log`.
+Array, collection, audit, and figure jobs write `.log` files in the `logs/`
+subdirectory of their run-specific output directory. The repository tracks the
+top-level `logs/` directory so Slurm can open the launcher log at job start.
+
 Arrays are submitted without a user-imposed concurrency throttle. Site/QOS
 limits still apply.
 

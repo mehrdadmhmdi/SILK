@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
 #SBATCH --time=02:00:00
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/%x-%j.log
 
 set -euo pipefail
 
@@ -89,11 +89,6 @@ fi
 
 export SILK_PACKAGE_REF="${SILK_PACKAGE_REF:-$DEFAULT_PACKAGE_REF}"
 
-if [ -n "${SILK_INCLUDE_HISTORY_ABLATION:-}" ]; then
-  echo "WARNING: SILK_INCLUDE_HISTORY_ABLATION is obsolete and ignored." >&2
-  echo "         Use SILK_PAPER_FEATURE_MAP instead." >&2
-fi
-
 echo "SILK $SILK_RUN_STAGE configuration"
 echo "  config id:           $SILK_CONFIG_ID"
 echo "  config sha256:       $SILK_CONFIG_SHA256"
@@ -105,12 +100,10 @@ echo "  design phases:       ${SILK_DESIGN_PHASES:-primary,timepoint_extension}"
 echo "  forced schedule:     ${SILK_FORCE_SCHEDULE:-none}"
 echo "  kernels:             $SILK_BIOMARKER_KERNELS"
 echo "  JMbayes2:            $SILK_ENABLE_JMBAYES2"
-echo "  paper feature map:   $SILK_PAPER_FEATURE_MAP  (primary roster)"
 echo "  profile search rad.: $SILK_PROFILE_SEARCH_RADIUS"
 echo "  alt local radius:    $SILK_ALT_LOCAL_RADIUS"
 echo "  registration starts: $SILK_N_STARTS"
 echo "  bandwidth scale:     $SILK_BIOMARKER_BW_SCALE"
-echo "  feature map:         $SILK_FEATURE_MAP"
 
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
 if [[ "$SILK_RUN_STAGE" != "confirmatory" ]]; then
@@ -135,8 +128,6 @@ profile_search_radius=$SILK_PROFILE_SEARCH_RADIUS
 alt_local_radius=$SILK_ALT_LOCAL_RADIUS
 n_starts=$SILK_N_STARTS
 n_folds=$SILK_N_FOLDS
-feature_map=$SILK_FEATURE_MAP
-paper_feature_map=$SILK_PAPER_FEATURE_MAP
 package_ref=$SILK_PACKAGE_REF
 EOF
 
@@ -206,7 +197,7 @@ while IFS=$'\t' read -r resource_class n_tasks _sbatch task_list cpus memory wal
     --mem="$memory" \
     --time="$walltime" \
     --array="$array_spec" \
-    --output="$SILK_OUT_DIR/logs/%x-%A_%a.out" \
+    --output="$SILK_OUT_DIR/logs/%x-%A_%a.log" \
     --export="ALL,SILK_RESOURCE_CLASS=${resource_class},SILK_TASK_LIST_FILE=${task_list}" \
     "$SIM_DIR/job_array_worker.sh")"
   array_jobs+=("$job_id")
@@ -222,14 +213,14 @@ dependency="$(IFS=:; echo "${array_jobs[*]}")"
 check_job="$(sbatch --parsable \
   --dependency="afterany:${dependency}" \
   --export=ALL \
-  --output="$SILK_OUT_DIR/logs/%x-%j.out" \
+  --output="$SILK_OUT_DIR/logs/%x-%j.log" \
   "$SIM_DIR/job_check.sbatch")"
 echo "Audit/collection job: $check_job"
 if [[ "$SILK_RUN_STAGE" == "confirmatory" ]]; then
   figure_job="$(sbatch --parsable \
     --dependency="afterok:${check_job}" \
     --export=ALL \
-    --output="$SILK_OUT_DIR/logs/%x-%j.out" \
+    --output="$SILK_OUT_DIR/logs/%x-%j.log" \
     "$SIM_DIR/job_fig.sbatch")"
   echo "Figure job: $figure_job"
 else
