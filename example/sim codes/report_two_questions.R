@@ -5,17 +5,14 @@
 # the manuscript poses. Neither replaces the other.
 #
 #   Q1  Does registration correct the clock?
-#       Hold the feature map g fixed and change ONLY the age coordinate:
-#         recorded  ->  SILK-calibrated  ->  latent oracle.
-#       Primary map: residual-time Cox on g(age coordinate, invariant history)
-#       -- the manuscript's estimator. The attained-age triple is reported
-#       separately and labelled a supplementary clock-isolation analysis.
+#       Compare the biomarker-free recorded-age Cox benchmark, SILK-Gaussian,
+#       and the biomarker-free latent-age oracle Cox benchmark.
 #
 #   Q2  Does the complete SILK procedure beat procedures a practitioner could
 #       actually run? Prespecified competitor pool, reported honestly.
 #
-# Estimand note. SILK's consistent estimand conditions on the CALIBRATED age and
-# the shift-invariant history, not on the latent age. Primary performance is
+# Estimand note. SILK's consistent estimand conditions on CALIBRATED age,
+# not on latent age. Primary performance is
 # assessed by held-out proper scores (IBS, calibration). Shift and stage RMSE
 # against the true shift appear only in Section S as latent-resolution
 # diagnostics. Profile separation, boundary frequency and multistart spread
@@ -64,54 +61,37 @@ BOOT_SEED <- as.integer(Sys.getenv("REPORT_BOOT_SEED", unset = "20260530"))
 # silent fallback.
 # ---------------------------------------------------------------------------
 
-# Deliberate, logged override for analysing the legacy 8.9.2026 freeze, which
-# has no SILK-History. There is no SILENT fallback: an absent primary method is
-# an error unless the analyst names the substitute explicitly here.
-PRIMARY_SILK_METHOD <- Sys.getenv("REPORT_PRIMARY_SILK", unset = "SILK-History")
-if (!identical(PRIMARY_SILK_METHOD, "SILK-History")) {
-  message("NOTE: primary SILK method overridden to '", PRIMARY_SILK_METHOD,
-          "' via REPORT_PRIMARY_SILK. This is not the manuscript's estimator; ",
-          "use only for legacy-freeze analysis.")
-}
+PRIMARY_SILK_METHOD <- "SILK-Gaussian"
 
 TRIPLES <- list(
   primary = list(
-    label = "PRIMARY: residual-time Cox, g = (age coordinate, invariant history)",
-    recorded = "Cox-History-Recorded",
+    label = "PRIMARY: recorded age -> SILK-calibrated age -> latent-age oracle",
+    recorded = "Recorded-Cox",
     silk     = PRIMARY_SILK_METHOD,
-    oracle   = "Oracle-History-Latent-Age",
+    oracle   = "Oracle-Cox",
     required = TRUE
-  ),
-  clock_isolation = list(
-    label = "SUPPLEMENTARY: attained-age Cox, g = (X1, X2)  [clock isolation]",
-    recorded = "Cox-SameFeature-Recorded",
-    silk     = "SILK",
-    oracle   = "Oracle-Latent-Age",
-    required = FALSE
   )
 )
 
 # Complete procedures a practitioner could run. Fixed in advance.
 PRIMARY_COMPETITORS <- c(
-  "Cox-History-Recorded",
-  "Landmark-Recorded",
-  "MMLM-Recorded",
-  "JM-Recorded",
-  "RSF-Observed",
-  "DeepSurv-Observed",
+  "Recorded-Cox",
+  "Recorded-Beran",
+  "MMLM",
+  "JM",
+  "RSF",
+  "DeepSurv",
   "TimeError-Integrated-Landmark"
 )
 
 # Same method under a different kernel or survival layer; never a "competitor".
 SILK_FAMILY_METHODS <- c(
-  "SILK", "SILK-Laplace", "SILK-Matern32",
-  "SILK-History", "SILK-History-Laplace", "SILK-History-Matern32",
-  "Beran-SILK"
+  "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32"
 )
 
 # Kernel-sensitivity arm. Same survival layer and feature map by construction,
 # so this contrast varies the kernel alone.
-KERNEL_ARM <- c("SILK-History", "SILK-History-Laplace", "SILK-History-Matern32")
+KERNEL_ARM <- c("SILK-Gaussian", "SILK-Laplace", "SILK-Matern32")
 
 # ------------------------------------------------------------- consolidation
 
@@ -201,7 +181,9 @@ available <- sort(unique(primary$method))
 required_methods <- unique(c(
   unlist(lapply(TRIPLES[vapply(TRIPLES, function(z) isTRUE(z$required), logical(1))],
                 function(z) c(z$recorded, z$silk, z$oracle))),
-  PRIMARY_COMPETITORS
+  PRIMARY_COMPETITORS,
+  KERNEL_ARM,
+  "Oracle-Beran"
 ))
 missing_required <- setdiff(required_methods, available)
 if (length(missing_required)) {

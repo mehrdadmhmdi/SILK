@@ -8,7 +8,7 @@
 prediction_per_horizon_metrics(pred)
 prediction_replicate_metrics(per_horizon)
 prediction_method_summary(replicate_metrics)
-prediction_paired_differences(replicate_metrics, reference = "SILK")
+prediction_paired_differences(replicate_metrics, reference = "SILK-Gaussian")
 }
 \arguments{
   \item{pred}{A prediction frame data frame.}

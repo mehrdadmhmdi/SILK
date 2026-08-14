@@ -158,126 +158,62 @@ PROFILE_SEARCH_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_SEARCH_RADIUS", uns
 CLOCK_SIGNAL_MIN <- as.numeric(Sys.getenv("SILK_CLOCK_SIGNAL_MIN", unset = "0.10"))
 
 # ----------------------------- Methods ---------------------------------------
-# Active methods for a clean characteristic-kernel rerun. Historical linear
-# biomarker-kernel variants are intentionally excluded: they do not implement
-# the distribution-identifying registration analyzed in the paper.
-#   Cox layer:   Cox-SameFeature-Recorded -> Recorded-Cox
-#                SILK kernel variants     -> SILK-Cox
-#                Oracle-Latent-Age        -> Oracle clock-isolation (suppl.)
-#   Beran layer: Beran-Recorded           -> Recorded-Beran
-#                Beran-SILK               -> SILK-Beran
-#                Beran-Oracle-Latent-Age  -> Oracle-Beran
-#   Block B:     Landmark/MMLM/JM/RSF/DeepSurv (observed time)
+# The roster has exactly twelve methods.
+#
+# Biomarker-free clock benchmarks:
+#   Recorded-Cox, Recorded-Beran, Oracle-Cox, Oracle-Beran.
+# These use the relevant age coordinate and baseline covariates (X1, X2) only.
+#
+# Biomarker-using methods:
+#   the three SILK registration kernels, MMLM, JM, RSF, DeepSurv, and
+#   TimeError-Integrated-Landmark.
+# No history-augmented Cox variants or SILK-Beran variant are included.
 KERNEL_METHODS <- c(
-  gaussian = "SILK",
+  gaussian = "SILK-Gaussian",
   laplace = "SILK-Laplace",
   matern32 = "SILK-Matern32"
 )
 ACTIVE_KERNEL_METHODS <- unname(KERNEL_METHODS[BIOMARKER_KERNELS])
 
-# The paper's calibrated estimand conditions on the calibrated landmark age AND
-# the shift-invariant history. The three methods sharing that feature map --
-# Cox-History-Recorded, SILK-History, Oracle-History-Latent-Age -- are therefore
-# part of the primary roster, not an ablation. Set SILK_PAPER_FEATURE_MAP=false
-# to reproduce the 8.9.2026 roster, which omitted them.
-INCLUDE_PAPER_FEATURE_MAP <- !identical(
-  tolower(Sys.getenv("SILK_PAPER_FEATURE_MAP", unset = "true")), "false"
-)
-# Legacy alias retained so old job scripts still resolve.
-INCLUDE_HISTORY_ABLATION <- INCLUDE_PAPER_FEATURE_MAP
-
-# Primary SILK variants: residual-time Cox on the paper feature map, one per
-# characteristic kernel. Kernel sensitivity must vary ONLY the kernel, so all
-# three share this survival layer, feature map, folds, and seeds.
-PAPER_KERNEL_METHODS <- c(
-  gaussian = "SILK-History",
-  laplace = "SILK-History-Laplace",
-  matern32 = "SILK-History-Matern32"
-)
-ACTIVE_PAPER_KERNEL_METHODS <- unname(PAPER_KERNEL_METHODS[BIOMARKER_KERNELS])
-
 METHODS <- c(
-  "Landmark-Recorded",
-  "Cox-SameFeature-Recorded",
-  "MMLM-Recorded",
-  "JM-Recorded",
-  "RSF-Observed",
-  "DeepSurv-Observed",
-  "TimeError-Integrated-Landmark",
   ACTIVE_KERNEL_METHODS,
-  "Beran-Recorded",
-  "Beran-SILK",
-  "Beran-Oracle-Latent-Age",
-  "Oracle-Latent-Age"
+  "Recorded-Cox",
+  "Recorded-Beran",
+  "MMLM",
+  "JM",
+  "RSF",
+  "DeepSurv",
+  "TimeError-Integrated-Landmark",
+  "Oracle-Cox",
+  "Oracle-Beran"
 )
-if (INCLUDE_PAPER_FEATURE_MAP) {
-  METHODS <- c(
-    METHODS,
-    "Cox-History-Recorded",
-    ACTIVE_PAPER_KERNEL_METHODS,
-    "Oracle-History-Latent-Age"
-  )
-}
 
 # Prespecified analysis roles. The reporting script must not infer these.
-#
-# The primary triple is the CLOCK-ISOLATION triple: all three arms share the
-# plain survival state (landmark age, X1, X2) and differ only in whether that
-# age coordinate is recorded, calibrated, or latent. Biomarkers enter SILK
-# solely through the registration layer.
-#
-# The rich "-History" triple additionally puts the current biomarker values and
-# pooled history summaries into the survival layer. In the mean-trajectory
-# scenarios those markers determine latent age to within 0.1-0.9 years while the
-# origin error has SD 5, so the survival layer reconstructs the latent clock
-# directly and the recorded-versus-oracle IBS gap collapses from a mean of
-# 7.7e-3 to 0.23e-3 -- a factor of 33. The rich map therefore removes the very
-# effect the method exists to correct and cannot serve as the primary test.
-# It is retained as the deployed-pipeline comparison against feasible methods.
-PRIMARY_SILK_METHOD <- "SILK"
+PRIMARY_SILK_METHOD <- "SILK-Gaussian"
 PRIMARY_TRIPLE <- c(
-  recorded = "Cox-SameFeature-Recorded",
+  recorded = "Recorded-Cox",
   silk = PRIMARY_SILK_METHOD,
-  oracle = "Oracle-Latent-Age"
+  oracle = "Oracle-Cox"
 )
-SUPPLEMENTARY_RICH_FEATURE_TRIPLE <- c(
-  recorded = "Cox-History-Recorded",
-  silk = "SILK-History",
-  oracle = "Oracle-History-Latent-Age"
-)
-# Legacy alias retained so older reporting scripts still resolve.
-SUPPLEMENTARY_CLOCK_ISOLATION_TRIPLE <- PRIMARY_TRIPLE
+
 # Complete feasible procedures a practitioner could run. Prespecified, so the
-# leaderboard cannot silently absorb ablations or oracle bounds.
+# leaderboard cannot silently absorb sibling SILK kernels or oracle bounds.
 PRIMARY_COMPETITORS <- c(
-  "Cox-SameFeature-Recorded",
-  "Landmark-Recorded",
-  "MMLM-Recorded",
-  "JM-Recorded",
-  "RSF-Observed",
-  "DeepSurv-Observed",
+  "Recorded-Cox",
+  "Recorded-Beran",
+  "MMLM",
+  "JM",
+  "RSF",
+  "DeepSurv",
   "TimeError-Integrated-Landmark"
 )
-SILK_FAMILY_METHODS <- c(
-  ACTIVE_KERNEL_METHODS, ACTIVE_PAPER_KERNEL_METHODS, "Beran-SILK"
-)
-ORACLE_METHODS <- c(
-  "Oracle-Latent-Age", "Beran-Oracle-Latent-Age", "Oracle-History-Latent-Age"
+SILK_FAMILY_METHODS <- ACTIVE_KERNEL_METHODS
+ORACLE_METHODS <- c("Oracle-Cox", "Oracle-Beran")
+BIOMARKER_FREE_METHODS <- c(
+  "Recorded-Cox", "Recorded-Beran", "Oracle-Cox", "Oracle-Beran"
 )
 METHOD_ORDER <- METHODS
 
-SURVIVAL_HISTORY_BIOMARKERS <- as.integer(Sys.getenv("SILK_SURV_HIST_B", unset = "3"))
-# Which invariant-history summary enters the fixed feature map g. "default"
-# reproduces the frozen behaviour; "distributional" adds per-biomarker
-# dispersion and pooled shape, which is what the dist_* scenarios actually
-# encode. The confirmatory value is fixed in locked_confirmatory_config.sh.
-SURVIVAL_FEATURE_MAP <- tolower(trimws(
-  Sys.getenv("SILK_FEATURE_MAP", unset = "default")
-))
-if (!SURVIVAL_FEATURE_MAP %in% c("minimal", "default", "distributional")) {
-  stop("SILK_FEATURE_MAP must be minimal, default, or distributional.", call. = FALSE)
-}
-SURVIVAL_HISTORY_KEEP <- c("X1", "X2")
 TIMEERROR_N_IMPUTE <- as.integer(Sys.getenv("SILK_TIMEERROR_N_IMPUTE", unset = "5"))
 TIMEERROR_SD <- as.numeric(Sys.getenv("SILK_TIMEERROR_SD", unset = "1.5"))
 TIMEERROR_USE_TRUTH <- identical(tolower(Sys.getenv("SILK_TIMEERROR_USE_TRUTH", unset = "false")), "true")
@@ -372,30 +308,18 @@ SCENARIO_LABELS <- c(
 
 # Canonical architecture display names (registration x survival layer).
 METHOD_LABELS <- c(
-  "Landmark-Recorded" = "Landmark Cox (recorded age)",
-  "Cox-SameFeature-Recorded" = "Recorded-age Cox diagnostic",
-  "MMLM-Recorded" = "MMLM (recorded age)",
-  "JM-Recorded" = "Joint model (recorded age)",
-  "RSF-Observed" = "Random survival forest",
-  "DeepSurv-Observed" = "DeepSurv (recorded age)",
-  "TimeError-Integrated-Landmark" = "MI landmark",
-  # Supplementary clock-isolation arm: attained-age Cox, covariates (X1, X2).
-  "SILK" = "SILK-Cox diagnostic (Gaussian)",
-  "SILK-Laplace" = "SILK-Cox diagnostic (Laplace)",
-  "SILK-Matern32" = "SILK-Cox diagnostic (Matern-3/2)",
-  # Primary arm: residual-time Cox on g(age coordinate, invariant history).
-  "Cox-History-Recorded" = "Recorded-age Cox",
-  "SILK-History" = "SILK-Cox (Gaussian)",
-  "SILK-History-Laplace" = "SILK-Cox (Laplace)",
-  "SILK-History-Matern32" = "SILK-Cox (Matern-3/2)",
-  "Oracle-History-Latent-Age" = "Oracle-Cox",
-  "Beran-Recorded" = "Recorded-age Beran",
-  "Beran-SILK" = "SILK-Beran (Gaussian)",
-  "Beran-Oracle-Latent-Age" = "Oracle-Beran",
-  "Oracle-Latent-Age" = "Oracle-Cox diagnostic",
-  # legacy alias: the redundant mean-trajectory variant present in 6.25 outputs;
-  # not part of the canonical roster, mapped for back-compatible plotting only.
-  "SILK-MeanReg" = "SILK-MeanTraj (suppl.)"
+  "SILK-Gaussian" = "SILK-Gaussian",
+  "SILK-Laplace" = "SILK-Laplace",
+  "SILK-Matern32" = "SILK-Matérn-3/2",
+  "Recorded-Cox" = "Recorded-Cox",
+  "Recorded-Beran" = "Recorded-Beran",
+  "MMLM" = "MMLM",
+  "JM" = "JM",
+  "RSF" = "RSF",
+  "DeepSurv" = "DeepSurv",
+  "TimeError-Integrated-Landmark" = "TimeError-Integrated-Landmark",
+  "Oracle-Cox" = "Oracle-Cox",
+  "Oracle-Beran" = "Oracle-Beran"
 )
 
 SCHEDULE_LABELS <- c(
@@ -497,9 +421,6 @@ silk_options(
   N_CORES = registration_cores,
   METHODS = METHODS,
   METHOD_ORDER = METHOD_ORDER,
-  SURVIVAL_HISTORY_BIOMARKERS = SURVIVAL_HISTORY_BIOMARKERS,
-  SURVIVAL_FEATURE_MAP = SURVIVAL_FEATURE_MAP,
-  SURVIVAL_HISTORY_KEEP = SURVIVAL_HISTORY_KEEP,
   SCENARIOS = SCENARIOS,
   SCENARIO_LABELS = SCENARIO_LABELS,
   METHOD_LABELS = METHOD_LABELS,

@@ -20,7 +20,7 @@ fit_timeerror_integrated_landmark <- function(train_subjects, train_visits,
       shifted$subjects,
       shifted$visits,
       clock = "recorded",
-      include_biomarker = FALSE
+      include_biomarker = TRUE
     )
     models[[b]] <- fit_residual_cox(shifted$subjects, x)
   }
@@ -30,7 +30,11 @@ fit_timeerror_integrated_landmark <- function(train_subjects, train_visits,
     n_impute = n_impute,
     error_sd = error_sd,
     use_truth = use_truth,
-    seed = seed
+    seed = seed,
+    implementation = paste0(
+      "Monte Carlo integrated recorded-time landmark Cox with current biomarker; ",
+      n_impute, " time-error draws"
+    )
   )
 }
 
@@ -49,7 +53,7 @@ predict_timeerror_integrated_landmark <- function(fit, test_subjects, test_visit
       shifted$subjects,
       shifted$visits,
       clock = "recorded",
-      include_biomarker = FALSE
+      include_biomarker = TRUE
     )
     risk_sum <- risk_sum + predict_residual_cox_risk(fit$models[[b]], x, horizons)
     landmark_sum <- landmark_sum + shifted$subjects$A_obs

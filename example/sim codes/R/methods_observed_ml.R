@@ -8,7 +8,7 @@
 
 fit_rsf_observed <- function(train_subjects, train_visits, seed = NULL) {
   if (!requireNamespace("ranger", quietly = TRUE)) {
-    stop("RSF-Observed requires the ranger package, which is not installed.", call. = FALSE)
+    stop("RSF requires the ranger package, which is not installed.", call. = FALSE)
   }
   x <- observed_profile_covariates(train_subjects, train_visits)
   keep <- apply(x, 2L, stats::sd, na.rm = TRUE) > 1e-10
@@ -30,7 +30,7 @@ fit_rsf_observed <- function(train_subjects, train_visits, seed = NULL) {
     respect.unordered.factors = "order"
   )
   list(
-    method = "RSF-Observed",
+    method = "RSF",
     fit = fit,
     columns = colnames(x),
     center = standardized$center,
@@ -68,7 +68,7 @@ predict_rsf_observed <- function(fit, test_subjects, test_visits,
 
 fit_deepsurv_observed <- function(train_subjects, train_visits, seed = NULL) {
   if (!requireNamespace("survivalmodels", quietly = TRUE)) {
-    stop("DeepSurv-Observed requires the survivalmodels package, which is not installed.", call. = FALSE)
+    stop("DeepSurv requires the survivalmodels package, which is not installed.", call. = FALSE)
   }
   x <- observed_profile_covariates(train_subjects, train_visits)
   keep <- apply(x, 2L, stats::sd, na.rm = TRUE) > 1e-10
@@ -99,7 +99,7 @@ fit_deepsurv_observed <- function(train_subjects, train_visits, seed = NULL) {
     verbose = FALSE
   )
   list(
-    method = "DeepSurv-Observed",
+    method = "DeepSurv",
     fit = fit,
     columns = colnames(x),
     center = standardized$center,

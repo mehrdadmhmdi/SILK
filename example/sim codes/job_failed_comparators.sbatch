@@ -33,13 +33,7 @@ fi
 export SILK_PACKAGE_REF="${SILK_PACKAGE_REF:-$DEFAULT_PACKAGE_REF}"
 export SILK_N_REP="${SILK_N_REP:-50}"
 export SILK_ENABLE_JMBAYES2=true
-export SILK_ONLY_METHODS="JM-Recorded,DeepSurv-Observed"
-# This job repairs two comparators in the LEGACY 8.9.2026 freeze, so it keeps
-# that roster. SILK_INCLUDE_HISTORY_ABLATION is obsolete and no longer read;
-# SILK_PAPER_FEATURE_MAP=false is the legacy-roster switch. Neither affects the
-# two methods repaired here, but the setting is made explicit so the printed
-# configuration matches what cfg.R actually does.
-export SILK_PAPER_FEATURE_MAP=false
+export SILK_ONLY_METHODS="JM,DeepSurv"
 export SILK_OUT_DIR="${SILK_REPAIR_OUT_DIR:-$SIM_DIR/outputs-failed-comparators}"
 
 echo "SILK failed-comparator repair"

@@ -169,24 +169,17 @@ silk_default_options <- function() {
 
     # Methods
     METHODS = c(
-      "Landmark-Recorded", "Cox-SameFeature-Recorded",
-      "MMLM-Recorded", "JM-Recorded",
-      "RSF-Observed", "DeepSurv-Observed",
-      "TimeError-Integrated-Landmark", "SILK", "SILK-Laplace", "SILK-Matern32",
-      "Beran-Recorded", "Beran-SILK",
-      "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
+      "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
+      "Recorded-Cox", "Recorded-Beran",
+      "MMLM", "JM", "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
+      "Oracle-Cox", "Oracle-Beran"
     ),
     METHOD_ORDER = c(
-      "Landmark-Recorded", "Cox-SameFeature-Recorded",
-      "MMLM-Recorded", "JM-Recorded",
-      "RSF-Observed", "DeepSurv-Observed",
-      "TimeError-Integrated-Landmark", "SILK", "SILK-Laplace", "SILK-Matern32",
-      "Beran-Recorded", "Beran-SILK",
-      "Beran-Oracle-Latent-Age", "Oracle-Latent-Age"
+      "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
+      "Recorded-Cox", "Recorded-Beran",
+      "MMLM", "JM", "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
+      "Oracle-Cox", "Oracle-Beran"
     ),
-
-    SURVIVAL_HISTORY_BIOMARKERS = 3L,
-    SURVIVAL_HISTORY_KEEP = c("X1", "X2"),
 
     # Scenario definitions.
     # The primary error SDs 6 and 12 imply age reliabilities of approximately
@@ -258,23 +251,18 @@ silk_default_options <- function() {
 
     # Canonical architecture display names (registration x survival layer).
     METHOD_LABELS = c(
-      "Landmark-Recorded" = "Landmark-Recorded",
-      "Cox-SameFeature-Recorded" = "Recorded-Cox",
-      "MMLM-Recorded" = "MMLM-Recorded",
-      "JM-Recorded" = "JM-Recorded",
-      "RSF-Observed" = "RSF-Observed",
-      "DeepSurv-Observed" = "DeepSurv-Observed",
-      "TimeError-Integrated-Landmark" = "MI Back-Calc Landmark",
-      SILK = "SILK-Cox (Gaussian)",
-      "SILK-Laplace" = "SILK-Cox (Laplace)",
-      "SILK-Matern32" = "SILK-Cox (Matern-3/2)",
-      "Cox-History-Recorded" = "Recorded-Cox + history (suppl.)",
-      "SILK-History" = "SILK-Cox + history (suppl.)",
-      "Beran-Recorded" = "Recorded-Beran",
-      "Beran-SILK" = "SILK-Beran",
-      "Beran-Oracle-Latent-Age" = "Oracle-Beran",
-      "Oracle-Latent-Age" = "Oracle-Cox",
-      "SILK-MeanReg" = "SILK-MeanTraj (suppl.)"
+      "SILK-Gaussian" = "SILK-Gaussian",
+      "SILK-Laplace" = "SILK-Laplace",
+      "SILK-Matern32" = "SILK-Matérn-3/2",
+      "Recorded-Cox" = "Recorded-Cox",
+      "Recorded-Beran" = "Recorded-Beran",
+      "MMLM" = "MMLM",
+      "JM" = "JM",
+      "RSF" = "RSF",
+      "DeepSurv" = "DeepSurv",
+      "TimeError-Integrated-Landmark" = "TimeError-Integrated-Landmark",
+      "Oracle-Cox" = "Oracle-Cox",
+      "Oracle-Beran" = "Oracle-Beran"
     ),
 
     SCHEDULE_LABELS = c(

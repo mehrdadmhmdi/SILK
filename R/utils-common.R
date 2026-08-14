@@ -294,17 +294,31 @@ fit_age_scale_cox <- function(subjects, start_age, x) {
   keep <- if (ncol(x) > 0L) apply(x, 2, stats::sd, na.rm = TRUE) > 1e-10 else logical(0)
   x <- x[, keep, drop = FALSE]
   km <- fit_km_model(subjects$U, subjects$delta)
-  if (ncol(x) == 0L) {
-    return(list(type = "km", km = km, keep = keep, center = numeric(0), scale = numeric(0)))
-  }
-  std <- standardize_matrix(x)
   df <- data.frame(
     start = as.numeric(start_age),
     stop = as.numeric(start_age) + subjects$U,
     status = subjects$delta,
-    std$train,
     check.names = FALSE
   )
+  if (ncol(x) == 0L) {
+    fit <- tryCatch(
+      survival::coxph(
+        survival::Surv(start, stop, status) ~ 1,
+        data = df, ties = "breslow", x = FALSE
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(fit)) {
+      return(list(type = "km", km = km, keep = keep, center = numeric(0), scale = numeric(0)))
+    }
+    bh <- survival::basehaz(fit, centered = FALSE)
+    return(list(
+      type = "cox_age_null", fit = fit, basehaz = bh, keep = keep,
+      center = numeric(0), scale = numeric(0), km = km
+    ))
+  }
+  std <- standardize_matrix(x)
+  df <- cbind(df, as.data.frame(std$train, check.names = FALSE))
   xnames <- paste0("x", seq_len(ncol(std$train)))
   names(df)[-(1:3)] <- xnames
   form <- stats::as.formula(paste("survival::Surv(start, stop, status) ~", paste(xnames, collapse = "+")))
@@ -324,12 +338,19 @@ fit_age_scale_cox <- function(subjects, start_age, x) {
 predict_age_scale_cox_risk <- function(model, landmark_age, x_new, horizons) {
   x_new <- as.matrix(x_new)
   if (length(model$keep)) x_new <- x_new[, model$keep, drop = FALSE]
-  if (identical(model$type, "km") || ncol(x_new) == 0L) {
+  if (identical(model$type, "km")) {
     return(predict_km_risk(model$km, horizons, nrow(x_new)))
   }
-  x_new <- apply_standardizer(x_new, model)
-  beta <- as.numeric(stats::coef(model$fit))
-  lp <- as.numeric(x_new %*% beta)
+  if (identical(model$type, "cox_age_null")) {
+    lp <- rep(0, nrow(x_new))
+  } else {
+    if (ncol(x_new) == 0L) {
+      stop("The fitted age-scale Cox model requires covariates.", call. = FALSE)
+    }
+    x_new <- apply_standardizer(x_new, model)
+    beta <- as.numeric(stats::coef(model$fit))
+    lp <- as.numeric(x_new %*% beta)
+  }
   all_times <- sort(unique(c(as.numeric(landmark_age), as.numeric(landmark_age) + rep(horizons, each = length(landmark_age)))))
   H_all <- step_eval(model$basehaz$time, model$basehaz$hazard, all_times)
   H_lookup <- stats::setNames(H_all, as.character(all_times))
@@ -348,6 +369,11 @@ base_covariates <- function(subjects) {
   out <- as.matrix(subjects[, c("X1", "X2"), drop = FALSE])
   colnames(out) <- c("X1", "X2")
   out
+}
+
+#' @keywords internal
+age_only_covariates <- function(subjects) {
+  matrix(numeric(0), nrow = nrow(subjects), ncol = 0L)
 }
 
 #' @keywords internal
@@ -371,22 +397,6 @@ current_marker_value <- function(subjects, visits, clock = c("recorded", "latent
   }
   out[!is.finite(out)] <- 0
   out
-}
-
-#' @keywords internal
-silk_history_covariates <- function(subjects, history_df, stage) {
-  hist <- history_df[match(subjects$id, history_df$id), , drop = FALSE]
-  survival_history_biomarkers <- silk_opt("SURVIVAL_HISTORY_BIOMARKERS")
-  current_names <- intersect(paste0("current_B", seq_len(survival_history_biomarkers)), names(hist))
-  keep <- intersect(c("X1", "X2", current_names, "mean_B", "sd_B", "visit_count", "span"), names(hist))
-  x <- as.matrix(hist[, keep, drop = FALSE])
-  cbind(calibrated_landmark = stage, x)
-}
-
-#' @keywords internal
-recorded_same_feature_covariates <- function(subjects, visits) {
-  history <- make_history_features(subjects, visits)
-  silk_history_covariates(subjects, history, subjects$A_obs)
 }
 
 #' @keywords internal

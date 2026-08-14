@@ -1,6 +1,6 @@
 # =============================================================================
 # methods_mmlm_recorded.R
-# MMLM-Recorded: mixed-model landmarking on recorded time.
+# MMLM: mixed-model landmarking on recorded time.
 # A mixed model smooths the current biomarker value only; the landmark Cox model
 # uses baseline covariates, recorded landmark age, and that smoothed value.
 # Reference: Rizopoulos et al. dynamic prediction work; nlme::lme and survival.
@@ -17,7 +17,7 @@ fit_mmlm_recorded <- function(train_subjects, train_visits) {
     include_biomarker = TRUE
   )
   fit <- fit_residual_cox(train_subjects, x)
-  list(method = "MMLM-Recorded", marker_model = marker_model, fit = fit)
+  list(method = "MMLM", marker_model = marker_model, fit = fit)
 }
 
 predict_mmlm_recorded <- function(fit, test_subjects, test_visits,

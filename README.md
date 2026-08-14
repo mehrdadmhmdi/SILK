@@ -53,12 +53,17 @@ metrics$summary
 
 ## Comparators and Diagnostics
 
-The package includes the manuscript comparators used to separate calibration
-from ordinary history modeling. `fit_same_feature_recorded_cox()` is the
-same-history-feature, recorded-age ablation. It is a diagnostic for what drives
-the gain, not a second SILK kernel. `fit_beran_silk()` reuses the same
-characteristic-kernel registration with a Beran survival layer; pass the same
-`registration` object to both Cox and Beran fits to avoid refitting it.
+The simulation roster contains exactly 12 methods. Four benchmarks deliberately
+exclude longitudinal biomarkers: `Recorded-Cox`, `Recorded-Beran`,
+`Oracle-Cox`, and `Oracle-Beran`. Their exported interfaces are
+`fit_recorded_cox()`, `fit_recorded_beran()`, `fit_oracle_cox()`, and
+`fit_oracle_beran()`; the recorded methods use recorded age only, while the
+oracle methods use latent true age only.
+
+The eight biomarker-using methods are `SILK-Gaussian`, `SILK-Laplace`,
+`SILK-Matern32`, `MMLM`, `JM`, `RSF`, `DeepSurv`, and
+`TimeError-Integrated-Landmark`. The three SILK entries differ only in their
+registration kernel.
 
 Registration fits carry profile-gap diagnostics (`gap`, `gap_q1`, and
 `gap_q2`) so weakly identified shift profiles can be flagged instead of treated

@@ -5,7 +5,7 @@
 source(file.path("R", "run_simulation_comparisons.R"))
 source_silk_prediction_modules()
 
-repair_methods <- c("JM-Recorded", "DeepSurv-Observed")
+repair_methods <- c("JM", "DeepSurv")
 plan <- build_task_plan()
 expected <- expand.grid(
   task_id = plan$task_id,
@@ -92,4 +92,4 @@ if (length(problems)) {
   stop("Repair audit failed: ", paste(problems, collapse = "; "), call. = FALSE)
 }
 
-cat("Repair audit passed: every JM-Recorded and DeepSurv-Observed task succeeded.\n")
+cat("Repair audit passed: every JM and DeepSurv task succeeded.\n")

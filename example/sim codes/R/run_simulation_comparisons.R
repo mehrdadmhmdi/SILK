@@ -15,7 +15,6 @@ source_silk_prediction_modules <- function() {
   suppressPackageStartupMessages(library(SILK))
   source(file.path("R", "cfg.R"))
   source(file.path("R", "methods_common.R"))
-  source(file.path("R", "methods_landmark_recorded.R"))
   source(file.path("R", "methods_mmlm_recorded.R"))
   source(file.path("R", "methods_jm_recorded.R"))
   source(file.path("R", "methods_observed_ml.R"))
@@ -45,13 +44,9 @@ run_with_warnings <- function(expr) {
 registration_kernel_for_method <- function(method) {
   switch(
     method,
-    SILK = "gaussian",
+    "SILK-Gaussian" = "gaussian",
     "SILK-Laplace" = "laplace",
     "SILK-Matern32" = "matern32",
-    "SILK-History" = "gaussian",
-    "SILK-History-Laplace" = "laplace",
-    "SILK-History-Matern32" = "matern32",
-    "Beran-SILK" = "gaussian",
     NA_character_
   )
 }
@@ -71,22 +66,22 @@ fit_one_prediction_method <- function(method, train, cell, seed_base,
   }
   switch(
     method,
-    "Landmark-Recorded" = fit_landmark_recorded(train$subjects, train$visits),
-    "Cox-SameFeature-Recorded" = fit_same_feature_recorded_cox(train$subjects, train$visits),
-    "MMLM-Recorded" = fit_mmlm_recorded(train$subjects, train$visits),
-    "JM-Recorded" = fit_jm_recorded(train$subjects, train$visits),
-    "DeepSurv-Observed" = fit_deepsurv_observed(
+    "Recorded-Cox" = fit_recorded_cox(train$subjects),
+    "Recorded-Beran" = fit_recorded_beran(train$subjects),
+    "MMLM" = fit_mmlm_recorded(train$subjects, train$visits),
+    "JM" = fit_jm_recorded(train$subjects, train$visits),
+    "DeepSurv" = fit_deepsurv_observed(
       train$subjects, train$visits, seed = seed_base + 709L
     ),
-    "RSF-Observed" = fit_rsf_observed(
+    "RSF" = fit_rsf_observed(
       train$subjects, train$visits, seed = seed_base + 811L
     ),
     "TimeError-Integrated-Landmark" = fit_timeerror_integrated_landmark(
       train$subjects, train$visits, seed = seed_base + 503L
     ),
-    "SILK" = fit_silk(
+    "SILK-Gaussian" = fit_silk(
       train$subjects, train$visits,
-      method = "SILK", registration = require_shared_registration()
+      method = "SILK-Gaussian", registration = require_shared_registration()
     ),
     "SILK-Laplace" = fit_silk(
       train$subjects, train$visits,
@@ -96,31 +91,8 @@ fit_one_prediction_method <- function(method, train, cell, seed_base,
       train$subjects, train$visits,
       method = "SILK-Matern32", registration = require_shared_registration("matern32")
     ),
-    "Cox-History-Recorded" = fit_recorded_history_ablation(
-      train$subjects, train$visits
-    ),
-    "Oracle-History-Latent-Age" = fit_oracle_history_latent_age(
-      train$subjects, train$visits
-    ),
-    "SILK-History" = fit_silk_history_ablation(
-      train$subjects, train$visits, require_shared_registration("gaussian"),
-      method = "SILK-History"
-    ),
-    "SILK-History-Laplace" = fit_silk_history_ablation(
-      train$subjects, train$visits, require_shared_registration("laplace"),
-      method = "SILK-History-Laplace"
-    ),
-    "SILK-History-Matern32" = fit_silk_history_ablation(
-      train$subjects, train$visits, require_shared_registration("matern32"),
-      method = "SILK-History-Matern32"
-    ),
-    "Beran-Recorded" = fit_beran_recorded(train$subjects),
-    "Beran-SILK" = fit_beran_silk(
-      train$subjects, train$visits,
-      registration = require_shared_registration()
-    ),
-    "Beran-Oracle-Latent-Age" = fit_beran_oracle_latent_age(train$subjects),
-    "Oracle-Latent-Age" = fit_oracle_latent_age(train$subjects, train$visits),
+    "Oracle-Cox" = fit_oracle_cox(train$subjects),
+    "Oracle-Beran" = fit_oracle_beran(train$subjects),
     stop("Unknown method: ", method, call. = FALSE)
   )
 }
@@ -137,35 +109,18 @@ predict_one_prediction_method <- function(method, fit, test, cell, horizons = PR
 
   pred <- switch(
     method,
-    "Landmark-Recorded" = do.call(predict_landmark_recorded, c(list(fit, test$subjects, test$visits), args)),
-    "Cox-SameFeature-Recorded" = do.call(predict_same_feature_recorded_cox, c(list(fit, test$subjects, test$visits), args)),
-    "MMLM-Recorded" = do.call(predict_mmlm_recorded, c(list(fit, test$subjects, test$visits), args)),
-    "JM-Recorded" = do.call(predict_jm_recorded, c(list(fit, test$subjects, test$visits), args)),
-    "DeepSurv-Observed" = do.call(predict_deepsurv_observed, c(list(fit, test$subjects, test$visits), args)),
-    "RSF-Observed" = do.call(predict_rsf_observed, c(list(fit, test$subjects, test$visits), args)),
+    "Recorded-Cox" = do.call(predict_recorded_cox, c(list(fit, test$subjects), args)),
+    "Recorded-Beran" = do.call(predict_recorded_beran, c(list(fit, test$subjects), args)),
+    "MMLM" = do.call(predict_mmlm_recorded, c(list(fit, test$subjects, test$visits), args)),
+    "JM" = do.call(predict_jm_recorded, c(list(fit, test$subjects, test$visits), args)),
+    "DeepSurv" = do.call(predict_deepsurv_observed, c(list(fit, test$subjects, test$visits), args)),
+    "RSF" = do.call(predict_rsf_observed, c(list(fit, test$subjects, test$visits), args)),
     "TimeError-Integrated-Landmark" = do.call(predict_timeerror_integrated_landmark, c(list(fit, test$subjects, test$visits), args)),
-    "SILK" = do.call(predict_silk, c(list(fit, test$subjects, test$visits), args)),
+    "SILK-Gaussian" = do.call(predict_silk, c(list(fit, test$subjects, test$visits), args)),
     "SILK-Laplace" = do.call(predict_silk, c(list(fit, test$subjects, test$visits), args)),
     "SILK-Matern32" = do.call(predict_silk, c(list(fit, test$subjects, test$visits), args)),
-    "Cox-History-Recorded" = do.call(
-      predict_recorded_history_ablation, c(list(fit, test$subjects, test$visits), args)
-    ),
-    "Oracle-History-Latent-Age" = do.call(
-      predict_oracle_history_latent_age, c(list(fit, test$subjects, test$visits), args)
-    ),
-    "SILK-History" = do.call(
-      predict_silk_history_ablation, c(list(fit, test$subjects, test$visits), args)
-    ),
-    "SILK-History-Laplace" = do.call(
-      predict_silk_history_ablation, c(list(fit, test$subjects, test$visits), args)
-    ),
-    "SILK-History-Matern32" = do.call(
-      predict_silk_history_ablation, c(list(fit, test$subjects, test$visits), args)
-    ),
-    "Beran-Recorded" = do.call(predict_beran_recorded, c(list(fit, test$subjects), args)),
-    "Beran-SILK" = do.call(predict_beran_silk, c(list(fit, test$subjects, test$visits), args)),
-    "Beran-Oracle-Latent-Age" = do.call(predict_beran_oracle_latent_age, c(list(fit, test$subjects), args)),
-    "Oracle-Latent-Age" = do.call(predict_oracle_latent_age, c(list(fit, test$subjects, test$visits), args)),
+    "Oracle-Cox" = do.call(predict_oracle_cox, c(list(fit, test$subjects), args)),
+    "Oracle-Beran" = do.call(predict_oracle_beran, c(list(fit, test$subjects), args)),
     stop("Unknown method: ", method, call. = FALSE)
   )
   validate_prediction_frame(pred)

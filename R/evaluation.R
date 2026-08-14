@@ -296,10 +296,10 @@ prediction_method_summary <- function(replicate_metrics) {
 #' Compute paired differences between SILK and comparators
 #'
 #' @param replicate_metrics Data frame from \code{prediction_replicate_metrics}.
-#' @param reference Character. Reference method name (default "SILK").
+#' @param reference Character. Reference method name (default "SILK-Gaussian").
 #' @return Data frame of paired differences with CIs.
 #' @export
-prediction_paired_differences <- function(replicate_metrics, reference = "SILK") {
+prediction_paired_differences <- function(replicate_metrics, reference = "SILK-Gaussian") {
   metric_names <- c(
     "integrated_brier_score", "mean_brier_score", "mean_auc",
     "brier_score_horizon", "auc_horizon", "calibration_in_large"

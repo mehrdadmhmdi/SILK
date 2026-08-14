@@ -10,7 +10,7 @@ fit_silk(
   shift_grid = NULL,
   seed = NULL,
   shift_range = NULL,
-  method = "SILK",
+  method = "SILK-Gaussian",
   registration = NULL,
   biomarker_kernel = NULL
 )
@@ -29,7 +29,8 @@ the grid is built from \code{shift_range} and \code{SHIFT_GRID_STEP}.}
 candidate shift values. Defaults to \code{DEFAULT_SHIFT_GRID_MIN} and
 \code{DEFAULT_SHIFT_GRID_MAX}.}
 
-\item{method}{Character label stored in prediction outputs.}
+\item{method}{Character label stored in prediction outputs. Defaults to
+\code{"SILK-Gaussian"}.}
 
 \item{registration}{Optional fitted object from
 \code{fit_silk_registration}. Supplying it lets multiple survival layers

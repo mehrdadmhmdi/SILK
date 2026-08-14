@@ -6,9 +6,9 @@ simulation. The manuscript is not read or modified by these scripts.
 ## Scientific target
 
 - Event times follow a Gompertz baseline hazard on attained latent age.
-- The primary clock-isolation comparison holds the Cox learner and baseline
-  covariates fixed and changes only the time coordinate: recorded age,
-  SILK-calibrated age, or latent oracle age.
+- The primary age comparison contrasts the age-only recorded and oracle Cox
+  bases with SILK-Gaussian, whose calibrated age is learned from longitudinal
+  biomarkers.
 - Biomarkers enter the primary SILK-Cox analysis only through the registration
   layer. Recorded-clock Cox therefore cannot bypass registration using a
   hand-built biomarker summary.
@@ -18,7 +18,8 @@ simulation. The manuscript is not read or modified by these scripts.
 - Gaussian RBF is the primary exact characteristic kernel. Exact Laplace and
   Matern-3/2 kernels are paired robustness analyses using the same data, folds,
   and Monte Carlo seeds. Linear and polynomial biomarker kernels are rejected.
-- RSF and DeepSurv receive recorded age and the full observed-history summary.
+- RSF and DeepSurv receive recorded age, baseline covariates, and the current
+  observed biomarker.
   DeepSurv uses a fixed CPU network, a training-only validation split, early
   stopping, and no Python data-loader workers.
 
@@ -86,30 +87,23 @@ export SILK_CONFIRMATORY_OUT_DIR="$PWD/outputs-confirmatory-50rep"
 sbatch job_validate.sbatch
 ```
 
-### Primary roster and the paper feature map
+### Exact method roster
 
-The manuscript's survival layer is a Cox model for **residual time** with a
-fixed feature map `g(age coordinate, invariant history)`, so the age coordinate
-is a covariate inside `g`, not the time axis. The primary roster is therefore
-the residual-time triple, which differs only in that coordinate:
+The simulation accepts exactly these 12 method IDs:
 
-| Method | Age coordinate |
-|---|---|
-| `Cox-History-Recorded` | recorded `A_obs` |
-| `SILK-History`, `SILK-History-Laplace`, `SILK-History-Matern32` | cross-fitted calibrated age, per kernel |
-| `Oracle-History-Latent-Age` | latent `A_star` (simulation-only) |
+| Role | Methods | Longitudinal biomarkers in survival prediction? |
+|---|---|---|
+| Recorded-age bases | `Recorded-Cox`, `Recorded-Beran` | No |
+| SILK registration kernels | `SILK-Gaussian`, `SILK-Laplace`, `SILK-Matern32` | Yes, for registration |
+| Biomarker comparators | `MMLM`, `JM`, `RSF`, `DeepSurv`, `TimeError-Integrated-Landmark` | Yes |
+| Latent-age oracle bases | `Oracle-Cox`, `Oracle-Beran` | No |
 
-All three kernels share this survival layer, feature map, folds and seeds, so
-the kernel-sensitivity contrast varies the kernel alone.
-
-The attained-age methods (`Cox-SameFeature-Recorded`, `SILK`, `SILK-Laplace`,
-`SILK-Matern32`, `Oracle-Latent-Age`) put age on the time axis with covariates
-`(X1, X2)`. They are retained as a **supplementary clock-isolation analysis**
-and must be labelled as such; they are not the paper's estimator.
-
-`SILK_INCLUDE_HISTORY_ABLATION` is obsolete and is no longer read. The locked
-rerun always uses the paper feature map. Reproducing the 8.9.2026 freeze should
-be done from its archived commit, not by modifying the locked rerun scripts.
+The four biomarker-free methods use only their stated age coordinate; no
+baseline covariate, current biomarker, biomarker history, or biomarker-derived
+feature enters those fits. The three SILK methods share
+the same survival layer, folds, seeds, and tuning, so the registration kernel
+is the only difference among them. No rich-history Cox, same-feature recorded
+Cox, SILK mean-regression, or extra Beran variant remains in the active design.
 
 ### Required validation before the confirmatory rerun
 
@@ -126,14 +120,14 @@ sbatch job_confirmatory.sbatch
 ```
 
 The primary report writes the paired estimate and confidence interval for
-`IBS(SILK-History) - IBS(Oracle-History-Latent-Age)`. It also compares SILK
-pairwise with every primary feasible comparator, including
-`Cox-History-Recorded`, and writes `q2_win_tie_summary.csv`.
+`IBS(SILK-Gaussian) - IBS(Oracle-Cox)`. It also compares `SILK-Gaussian`
+pairwise with every prespecified feasible comparator and writes
+`q2_win_tie_summary.csv`.
 
 ## Repair only the failed comparators
 
-The August confirmatory run failed only for `DeepSurv-Observed` prediction and
-parts of `JM-Recorded`. DeepSurv now passes a data frame at the
+The historical August run failed only for DeepSurv prediction and parts of JM.
+DeepSurv now passes a data frame at the
 `survivalmodels` prediction boundary. JM now uses a positive follow-up clock
 relative to each subject's recorded landmark, filters invalid longitudinal
 rows, and falls back from a random slope to a random intercept when necessary.
@@ -146,8 +140,8 @@ sbatch job_failed_comparators.sbatch
 ```
 
 This submits one unthrottled CPU job array over the existing 4,800 design
-tasks, with a two-hour limit per task, but evaluates only `JM-Recorded` and
-`DeepSurv-Observed`. It does not rerun SILK or any successful comparator, does
+tasks, with a two-hour limit per task, but evaluates only `JM` and
+`DeepSurv`. It does not rerun SILK or any successful comparator, does
 not overwrite the original results, and does not launch manuscript figures.
 The corrected JM implementation is rerun for every design cell so one reported
 method is not assembled from two different internal time definitions. The

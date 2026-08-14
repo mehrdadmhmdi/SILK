@@ -2,19 +2,17 @@
 % Please edit documentation in R/silk-method.R
 \name{silk_survival_layers}
 \alias{silk_survival_layers}
-\alias{fit_beran_recorded}
-\alias{predict_beran_recorded}
-\alias{fit_beran_silk}
-\alias{predict_beran_silk}
-\alias{fit_oracle_latent_age}
-\alias{fit_beran_oracle_latent_age}
-\alias{predict_oracle_latent_age}
-\alias{predict_beran_oracle_latent_age}
-\title{Beran and latent-age oracle survival layers}
+\alias{fit_recorded_beran}
+\alias{predict_recorded_beran}
+\alias{fit_oracle_cox}
+\alias{fit_oracle_beran}
+\alias{predict_oracle_cox}
+\alias{predict_oracle_beran}
+\title{Age-only recorded and oracle survival benchmarks}
 \usage{
-fit_beran_recorded(train_subjects)
+fit_recorded_beran(train_subjects)
 
-predict_beran_recorded(
+predict_recorded_beran(
   fit,
   test_subjects,
   horizons = NULL,
@@ -24,20 +22,13 @@ predict_beran_recorded(
   time_grid_setting = NA
 )
 
-fit_beran_silk(
-  train_subjects,
-  train_visits,
-  shift_grid = NULL,
-  shift_range = NULL,
-  seed = NULL,
-  registration = NULL,
-  biomarker_kernel = NULL
-)
+fit_oracle_cox(train_subjects)
 
-predict_beran_silk(
+fit_oracle_beran(train_subjects)
+
+predict_oracle_cox(
   fit,
   test_subjects,
-  test_visits,
   horizons = NULL,
   fold_id = 1L,
   replicate_id = 1L,
@@ -45,22 +36,7 @@ predict_beran_silk(
   time_grid_setting = NA
 )
 
-fit_oracle_latent_age(train_subjects, train_visits)
-
-fit_beran_oracle_latent_age(train_subjects)
-
-predict_oracle_latent_age(
-  fit,
-  test_subjects,
-  test_visits,
-  horizons = NULL,
-  fold_id = 1L,
-  replicate_id = 1L,
-  n_train_setting = NA,
-  time_grid_setting = NA
-)
-
-predict_beran_oracle_latent_age(
+predict_oracle_beran(
   fit,
   test_subjects,
   horizons = NULL,
@@ -86,29 +62,13 @@ predict_beran_oracle_latent_age(
 \item{n_train_setting}{Training-size label for bookkeeping.}
 
 \item{time_grid_setting}{Time-grid label for bookkeeping.}
-
-\item{train_visits}{Training visit data frame.}
-
-\item{shift_grid}{Candidate registration-shift grid.}
-
-\item{shift_range}{Two-element candidate shift range.}
-
-\item{seed}{Integer or NULL.}
-
-\item{registration}{Optional fitted object from
-\code{fit_silk_registration}; supplying it lets Cox and Beran survival
-layers share one registration fit.}
-
-\item{biomarker_kernel}{Optional characteristic biomarker kernel used when
-a registration is fitted internally.}
-
-\item{test_visits}{Test visit data frame.}
 }
 \value{
 A fitted survival-layer object for fit functions, or a standardized
-  prediction frame for prediction functions.
+prediction frame for prediction functions.
 }
 \description{
-Convenience fits and prediction methods used by the simulation study. The
-oracle methods require latent ages and are therefore simulation-only.
+The recorded methods use recorded age only; the oracle methods use latent
+true age only. None of these four methods uses baseline covariates or
+longitudinal biomarkers. Oracle methods are simulation-only.
 }

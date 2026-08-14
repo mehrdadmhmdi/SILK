@@ -17,26 +17,18 @@ method_palette <- function() {
   UIUC_ORANGE <- UIUC_ORANGE_HEX
   UIUC_BLUE <- UIUC_BLUE_HEX
   method_colours <- c(
-    "Landmark-Recorded" = "#FCB316",                 # Harvest
-    "Cox-SameFeature-Recorded" = "#707372",          # Storm (diagnostic)
-    "MMLM-Recorded" = "#007E8E",                     # Patina
-    "JM-Recorded" = "#5C0E41",                       # Berry
-    "DeepSurv-Observed" = "#006230",                  # Prairie
-    "RSF-Observed" = "#1D58A7",                       # Industrial
+    "SILK-Gaussian" = UIUC_ORANGE,
+    "SILK-Laplace" = UIUC_ORANGE,
+    "SILK-Matern32" = UIUC_ORANGE,
+    "Recorded-Cox" = "#707372",                      # Storm
+    "Recorded-Beran" = "#8E9090",                    # Storm 60
+    "MMLM" = "#007E8E",                              # Patina
+    "JM" = "#5C0E41",                                # Berry
+    "DeepSurv" = "#006230",                          # Prairie
+    "RSF" = "#1D58A7",                               # Industrial
     "TimeError-Integrated-Landmark" = "#7D3E13",     # Earth
-    "SILK-MeanReg" = UIUC_BLUE,
-    SILK = UIUC_BLUE,                                   # diagnostic, not reported
-    "SILK-Laplace" = UIUC_BLUE,
-    "SILK-Matern32" = UIUC_BLUE,
-    "Cox-History-Recorded" = UIUC_BLUE,
-    "SILK-History" = UIUC_ORANGE,
-    "SILK-History-Laplace" = UIUC_ORANGE,
-    "SILK-History-Matern32" = UIUC_ORANGE,
-    "Oracle-History-Latent-Age" = "#000000",
-    "Beran-Recorded" = "#8E9090",                    # Storm 60
-    "Beran-SILK" = UIUC_ORANGE,
-    "Beran-Oracle-Latent-Age" = "#707372",           # Storm
-    "Oracle-Latent-Age" = "#000000"
+    "Oracle-Cox" = "#000000",
+    "Oracle-Beran" = UIUC_BLUE
   )
   labels <- pretty_method(METHOD_ORDER)
   stats::setNames(unname(method_colours[METHOD_ORDER]), labels)
@@ -46,21 +38,17 @@ method_palette <- function() {
 method_linetype_palette <- function() {
   ids <- silk_opt("METHOD_ORDER")
   styles <- stats::setNames(rep("solid", length(ids)), ids)
-  styles[c("SILK-History-Laplace", "SILK-Laplace")] <- "dashed"
-  styles[c("SILK-History-Matern32", "SILK-Matern32")] <- "dotted"
-  styles[c("Beran-SILK")] <- "dotdash"
-  styles[c("Oracle-History-Latent-Age", "Oracle-Latent-Age",
-           "Beran-Oracle-Latent-Age")] <- "longdash"
+  styles["SILK-Laplace"] <- "dashed"
+  styles["SILK-Matern32"] <- "dotted"
+  styles["Recorded-Beran"] <- "dotdash"
+  styles["Oracle-Cox"] <- "longdash"
+  styles["Oracle-Beran"] <- "twodash"
   stats::setNames(unname(styles[ids]), pretty_method(ids))
 }
 
 #' @keywords internal
 report_method_ids <- function() {
-  setdiff(
-    silk_opt("METHOD_ORDER"),
-    c("Cox-SameFeature-Recorded", "SILK", "SILK-Laplace",
-      "SILK-Matern32", "Oracle-Latent-Age")
-  )
+  silk_opt("METHOD_ORDER")
 }
 
 #' @keywords internal
@@ -306,11 +294,15 @@ save_paired_difference_plot <- function(paired, fig_pred_dir, src_dir, phase, se
 
   z <- paired[
     paired$metric %in% c("integrated_brier_score", "mean_auc") &
-      paired$comparator != "Oracle-Latent-Age",
+      !paired$comparator %in% c("Oracle-Cox", "Oracle-Beran"),
     ,
     drop = FALSE
   ]
-  comparator_methods <- setdiff(METHOD_ORDER, c("SILK", "Oracle-Latent-Age"))
+  comparator_methods <- setdiff(
+    METHOD_ORDER,
+    c("SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
+      "Oracle-Cox", "Oracle-Beran")
+  )
   z <- z[z$comparator %in% comparator_methods, , drop = FALSE]
   z <- design_subset(z, phase, setting)
   if (!nrow(z)) return(invisible(FALSE))

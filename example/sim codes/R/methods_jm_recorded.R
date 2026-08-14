@@ -1,6 +1,6 @@
 # =============================================================================
 # methods_jm_recorded.R
-# JM-Recorded: current-value joint-model comparator using recorded biomarkers.
+# JM: current-value joint-model comparator using recorded biomarkers.
 # Uses a simple current-value association between one longitudinal biomarker and
 # the event process. Internally, time is expressed as positive follow-up time
 # relative to each subject's recorded landmark. This is the usual landmark
@@ -13,7 +13,7 @@ prepare_jm_followup_clock <- function(subjects, visits,
                                       landmark_time = JMBAYES_LANDMARK_TIME) {
   subject_index <- match(visits$id, subjects$id)
   if (anyNA(subject_index)) {
-    stop("JM-Recorded visits contain subject IDs absent from the subject table.", call. = FALSE)
+    stop("JM visits contain subject IDs absent from the subject table.", call. = FALSE)
   }
 
   landmark <- as.numeric(subjects$A_obs)
@@ -32,10 +32,10 @@ prepare_jm_followup_clock <- function(subjects, visits,
     out_subjects$C_obs
   )
   if (any(!is.finite(internal_times))) {
-    stop("JM-Recorded follow-up-clock transformation produced non-finite times.", call. = FALSE)
+    stop("JM follow-up-clock transformation produced non-finite times.", call. = FALSE)
   }
   if (any(pmin(out_subjects$T_obs, out_subjects$C_obs) <= landmark_time)) {
-    stop("JM-Recorded requires event/censoring times strictly after the landmark.", call. = FALSE)
+    stop("JM requires event/censoring times strictly after the landmark.", call. = FALSE)
   }
 
   list(subjects = out_subjects, visits = out_visits)
@@ -43,7 +43,7 @@ prepare_jm_followup_clock <- function(subjects, visits,
 
 fit_jm_longitudinal_model <- function(visits) {
   if (!requireNamespace("nlme", quietly = TRUE)) {
-    stop("JM-Recorded requires the nlme package.", call. = FALSE)
+    stop("JM requires the nlme package.", call. = FALSE)
   }
   biomarker <- first_biomarker_col(visits)
   dat <- visits
@@ -52,7 +52,7 @@ fit_jm_longitudinal_model <- function(visits) {
   dat <- dat[stats::complete.cases(dat[, required, drop = FALSE]), , drop = FALSE]
   dat$id <- droplevels(factor(dat$id))
   if (!nrow(dat) || length(unique(dat$id)) < 2L) {
-    stop("JM-Recorded has insufficient complete longitudinal observations.", call. = FALSE)
+    stop("JM has insufficient complete longitudinal observations.", call. = FALSE)
   }
 
   fit_one <- function(random_formula) {
@@ -80,17 +80,17 @@ fit_jm_longitudinal_model <- function(visits) {
     random_structure <- "random intercept fallback"
   }
   if (is.null(fit)) {
-    stop("JM-Recorded could not fit either longitudinal mixed model.", call. = FALSE)
+    stop("JM could not fit either longitudinal mixed model.", call. = FALSE)
   }
   list(fit = fit, biomarker = biomarker, random_structure = random_structure)
 }
 
 fit_jm_recorded <- function(train_subjects, train_visits) {
   if (!isTRUE(ENABLE_JMBAYES2)) {
-    stop("JM-Recorded requires SILK_ENABLE_JMBAYES2=true; method marked unavailable for this run.", call. = FALSE)
+    stop("JM requires SILK_ENABLE_JMBAYES2=true; method marked unavailable for this run.", call. = FALSE)
   }
   if (!requireNamespace("JMbayes2", quietly = TRUE)) {
-    stop("JM-Recorded requires the JMbayes2 package, which is not installed.", call. = FALSE)
+    stop("JM requires the JMbayes2 package, which is not installed.", call. = FALSE)
   }
 
   jm_data <- prepare_jm_followup_clock(train_subjects, train_visits)
@@ -116,7 +116,7 @@ fit_jm_recorded <- function(train_subjects, train_visits) {
   )
 
   list(
-    method = "JM-Recorded",
+    method = "JM",
     marker_model = marker_model,
     cox_fit = cox_fit,
     jm_fit = jm_fit,
@@ -190,7 +190,7 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
     subject_id <- test_subjects$id[i]
     sv <- test_visits[test_visits$id == subject_id, , drop = FALSE]
     if (!nrow(sv)) {
-      stop("JM-Recorded has no longitudinal history for test subject ", subject_id, ".", call. = FALSE)
+      stop("JM has no longitudinal history for test subject ", subject_id, ".", call. = FALSE)
     }
     sv$marker_value <- as.numeric(sv[[b]])
     sv$A_obs_il <- as.numeric(sv$A_obs_il) - as.numeric(test_subjects$A_obs[i]) + landmark_time
@@ -199,7 +199,7 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
     required_finite <- is.finite(sv$A_obs_il) & is.finite(sv$X1) & is.finite(sv$X2)
     sv <- sv[required_finite, , drop = FALSE]
     if (!nrow(sv)) {
-      stop("JM-Recorded has no finite longitudinal times for test subject ", subject_id, ".", call. = FALSE)
+      stop("JM has no finite longitudinal times for test subject ", subject_id, ".", call. = FALSE)
     }
     sv <- sv[order(sv$A_obs_il), , drop = FALSE]
     finite_marker <- is.finite(sv$marker_value)
@@ -232,7 +232,7 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
       ),
       error = function(e) {
         stop(
-          "JM-Recorded prediction failed for test subject ", subject_id,
+          "JM prediction failed for test subject ", subject_id,
           ": ", conditionMessage(e),
           call. = FALSE
         )
