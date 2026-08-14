@@ -38,8 +38,9 @@ binary_auc <- function(y, score) {
   ok <- is.finite(score) & y %in% c(0L, 1L)
   y <- y[ok]
   score <- score[ok]
-  n1 <- sum(y == 1L)
-  n0 <- sum(y == 0L)
+  # Use doubles so n1 * n0 does not overflow for large validation samples.
+  n1 <- as.double(sum(y == 1L))
+  n0 <- as.double(sum(y == 0L))
   if (n1 == 0L || n0 == 0L) return(NA_real_)
   ranks <- rank(score, ties.method = "average")
   (sum(ranks[y == 1L]) - n1 * (n1 + 1) / 2) / (n1 * n0)

@@ -22,8 +22,10 @@ method_palette <- function() {
     "SILK-Matern32" = UIUC_ORANGE,
     "Recorded-Cox" = "#707372",                      # Storm
     "Recorded-Beran" = "#8E9090",                    # Storm 60
-    "MMLM" = "#007E8E",                              # Patina
-    "JM" = "#5C0E41",                                # Berry
+    "MMLM-Correct" = "#007E8E",                      # Patina
+    "MMLM-Misspecified" = "#4DB6C2",                 # Patina light
+    "JM-Correct" = "#5C0E41",                        # Berry
+    "JM-Misspecified" = "#A64D79",                   # Berry light
     "DeepSurv" = "#006230",                          # Prairie
     "RSF" = "#1D58A7",                               # Industrial
     "TimeError-Integrated-Landmark" = "#7D3E13",     # Earth
@@ -41,6 +43,8 @@ method_linetype_palette <- function() {
   styles["SILK-Laplace"] <- "dashed"
   styles["SILK-Matern32"] <- "dotted"
   styles["Recorded-Beran"] <- "dotdash"
+  styles["MMLM-Misspecified"] <- "dashed"
+  styles["JM-Misspecified"] <- "dashed"
   styles["Oracle-Cox"] <- "longdash"
   styles["Oracle-Beran"] <- "twodash"
   stats::setNames(unname(styles[ids]), pretty_method(ids))

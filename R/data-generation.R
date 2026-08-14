@@ -89,25 +89,27 @@ sc_val <- function(sc, nm, default) {
 }
 
 #' @keywords internal
-biomarker_covariate_matrix <- function(X1, X2, p) {
+biomarker_covariate_matrix <- function(X1, X2, X3, X4, p) {
   beta_x1 <- as.numeric(silk_opt("BIO_BETA_X1"))[1L]
   beta_x2 <- as.numeric(silk_opt("BIO_BETA_X2"))[1L]
-  beta_x1_sq <- as.numeric(silk_opt("BIO_BETA_X1_SQ"))[1L]
+  beta_x3 <- as.numeric(silk_opt("BIO_BETA_X3"))[1L]
+  beta_x4 <- as.numeric(silk_opt("BIO_BETA_X4"))[1L]
+  beta_x3_sq <- as.numeric(silk_opt("BIO_BETA_X3_SQ"))[1L]
   nonlinear_marker <- as.integer(silk_opt("BIO_NONLINEAR_MARKER"))[1L]
 
-  linear_effect <- beta_x1 * X1 + beta_x2 * X2
+  linear_effect <- beta_x1 * X1 + beta_x2 * X2 + beta_x3 * X3 + beta_x4 * X4
   out <- matrix(linear_effect, nrow = length(X1), ncol = p)
   if (is.finite(nonlinear_marker) && nonlinear_marker >= 1L && nonlinear_marker <= p) {
-    # X1 ~ N(0,1), so centering X1^2 keeps this term mean zero and prevents a
-    # change in the marginal biomarker intercept. X2 is binary and X2^2 = X2.
+    # X3 ~ N(0,1), so centering X3^2 keeps this term mean zero and prevents a
+    # change in the marginal biomarker intercept.
     out[, nonlinear_marker] <- out[, nonlinear_marker] +
-      beta_x1_sq * (X1^2 - 1)
+      beta_x3_sq * (X3^2 - 1)
   }
   out
 }
 
 #' @keywords internal
-marker_mean_matrix <- function(age, X1, X2, U, p, sc) {
+marker_mean_matrix <- function(age, X1, X2, X3, X4, U, p, sc) {
   A_STAR_CENTER <- silk_opt("A_STAR_CENTER")
   DEFAULT_SIGNAL_AMP <- silk_opt("DEFAULT_SIGNAL_AMP")
   DEFAULT_U_BIO_COEF <- silk_opt("DEFAULT_U_BIO_COEF")
@@ -119,7 +121,7 @@ marker_mean_matrix <- function(age, X1, X2, U, p, sc) {
   signal <- sc$biomarker_signal[1]
   amp <- sc_val(sc, "signal_amp", if (signal == "weak") 0.12 else DEFAULT_SIGNAL_AMP)
   ucoef <- sc_val(sc, "u_bio_coef", DEFAULT_U_BIO_COEF)
-  covariate_effect <- biomarker_covariate_matrix(X1, X2, p)
+  covariate_effect <- biomarker_covariate_matrix(X1, X2, X3, X4, p)
 
   base_list <- list(
     2.2 * tanh(z),
@@ -136,7 +138,7 @@ marker_mean_matrix <- function(age, X1, X2, U, p, sc) {
 }
 
 #' @keywords internal
-r_biomarkers <- function(age, X1, X2, U, sc, p) {
+r_biomarkers <- function(age, X1, X2, X3, X4, U, sc, p) {
   A_STAR_CENTER <- silk_opt("A_STAR_CENTER")
   A_STAR_SD <- silk_opt("A_STAR_SD")
   DIST_SD_BASE <- silk_opt("DIST_SD_BASE")
@@ -152,7 +154,7 @@ r_biomarkers <- function(age, X1, X2, U, sc, p) {
     # A deliberately weak mean trajectory supplies a stable clock initializer;
     # the principal signal remains the stage-varying, moment-matched shape
     # below, which is what the characteristic-kernel loss exploits.
-    mean_mat <- marker_mean_matrix(age, X1, X2, U, p, sc)
+    mean_mat <- marker_mean_matrix(age, X1, X2, X3, X4, U, p, sc)
     stage_z <- (age - A_STAR_CENTER) / A_STAR_SD
     # Shape-only signal: the stage-dependent innovation moves from Gaussian to
     # symmetric bimodal while preserving mean zero and variance one. Hence raw
@@ -174,16 +176,16 @@ r_biomarkers <- function(age, X1, X2, U, sc, p) {
   } else if (signal == "stage_null") {
     # Prespecified negative control: biomarkers can depend on observed baseline
     # covariates but contain no latent-age, origin-shift, or frailty information.
-    mean_mat <- biomarker_covariate_matrix(X1, X2, p)
+    mean_mat <- biomarker_covariate_matrix(X1, X2, X3, X4, p)
     out <- mean_mat + matrix(
       stats::rnorm(n * p, sd = sc_val(sc, "sigma_bio", SIGMA_BIO_WEAK)),
       nrow = n
     )
   } else if (signal == "weak") {
-    mean_mat <- marker_mean_matrix(age, X1, X2, U, p, sc)
+    mean_mat <- marker_mean_matrix(age, X1, X2, X3, X4, U, p, sc)
     out <- mean_mat + matrix(stats::rnorm(n * p, sd = sc_val(sc, "sigma_bio", SIGMA_BIO_WEAK)), nrow = n, ncol = p)
   } else {
-    mean_mat <- marker_mean_matrix(age, X1, X2, U, p, sc)
+    mean_mat <- marker_mean_matrix(age, X1, X2, X3, X4, U, p, sc)
     out <- mean_mat + matrix(stats::rnorm(n * p, sd = sc_val(sc, "sigma_bio", SIGMA_BIO_MEAN)), nrow = n, ncol = p)
   }
 
@@ -226,6 +228,8 @@ make_visits <- function(subjects, lags, sc) {
       age = visit_age_star,
       X1 = rep(subjects$X1[i], length(lags_i)),
       X2 = rep(subjects$X2[i], length(lags_i)),
+      X3 = rep(subjects$X3[i], length(lags_i)),
+      X4 = rep(subjects$X4[i], length(lags_i)),
       U = rep(subjects$U_latent[i], length(lags_i)),
       sc = sc,
       p = p
@@ -240,6 +244,8 @@ make_visits <- function(subjects, lags, sc) {
         A_obs_il = visit_age_obs,
         X1 = subjects$X1[i],
         X2 = subjects$X2[i],
+        X3 = subjects$X3[i],
+        X4 = subjects$X4[i],
         stringsAsFactors = FALSE
       ),
       B
@@ -285,11 +291,16 @@ generate_dataset_fixed <- function(n, scenario_name, schedule_name = NULL, seed 
   A_STAR_SD <- silk_opt("A_STAR_SD")
   SURV_BETA_X1 <- silk_opt("SURV_BETA_X1")
   SURV_BETA_X2 <- silk_opt("SURV_BETA_X2")
+  SURV_BETA_X3 <- silk_opt("SURV_BETA_X3")
+  SURV_BETA_X4 <- silk_opt("SURV_BETA_X4")
+  SURV_BETA_X3_SQ <- silk_opt("SURV_BETA_X3_SQ")
   SURV_BETA_U <- silk_opt("SURV_BETA_U")
   CENS_RATE <- silk_opt("CENS_RATE")
 
   X1 <- stats::rnorm(n)
   X2 <- stats::rbinom(n, 1, 0.45)
+  X3 <- stats::rnorm(n)
+  X4 <- stats::rnorm(n)
   U_latent <- stats::rnorm(n)
   A_star <- stats::runif(n, LATENT_AGE_MIN, LATENT_AGE_MAX)
   eps <- r_common_shift(n, sc$sigma_eps, sc$eps_mean, sc$eps_type)
@@ -297,7 +308,9 @@ generate_dataset_fixed <- function(n, scenario_name, schedule_name = NULL, seed 
 
   beta_U <- sc_val(sc, "risk_beta_U", SURV_BETA_U)
   risk_age_growth <- sc_val(sc, "risk_age_growth", silk_opt("SURV_AGE_GROWTH"))
-  eta_risk <- SURV_BETA_X1 * X1 + SURV_BETA_X2 * X2 + beta_U * U_latent
+  eta_risk <- SURV_BETA_X1 * X1 + SURV_BETA_X2 * X2 +
+    SURV_BETA_X3 * X3 + SURV_BETA_X4 * X4 +
+    SURV_BETA_X3_SQ * (X3^2 - 1) + beta_U * U_latent
 
   D_star <- r_attained_age_ph(A_star, eta_risk, growth = risk_age_growth)
   G_star <- stats::rexp(n, rate = CENS_RATE)
@@ -312,6 +325,8 @@ generate_dataset_fixed <- function(n, scenario_name, schedule_name = NULL, seed 
     id = seq_len(n),
     X1 = X1,
     X2 = X2,
+    X3 = X3,
+    X4 = X4,
     U_latent = U_latent,
     A_star = A_star,
     eps = eps,
@@ -379,6 +394,8 @@ make_history_features <- function(subjects, visits, max_biomarkers = 4L) {
   out$span <- NA_real_
   out$X1 <- subjects$X1[match(ids, subjects$id)]
   out$X2 <- subjects$X2[match(ids, subjects$id)]
+  out$X3 <- subjects$X3[match(ids, subjects$id)]
+  out$X4 <- subjects$X4[match(ids, subjects$id)]
 
   for (k in seq_along(ids)) {
     sv <- visits[visits$id == ids[k], , drop = FALSE]

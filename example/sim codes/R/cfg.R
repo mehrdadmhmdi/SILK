@@ -90,15 +90,17 @@ CODECHECK_SCENARIOS <- c("mean_strong_dense", "dist_strong_dense", "mean_severe"
 # ----------------------------- DGM parameters --------------------------------
 SURV_LAMBDA_D <- 10.0
 SURV_KAPPA_D <- 1.35
-# Gompertz baseline on attained age. Growth 0.540 (was 0.18) puts enough of the
-# prognostic signal on the corrupted time scale that the Bayes-optimal mean AUC
-# is 0.808 and the recorded-versus-latent gap is 0.23 AUC, instead of 0.640 and
-# 0.055. The base rate is retuned so the four-year event rate stays at 0.24.
-SURV_AGE_BASE_RATE <- as.numeric(Sys.getenv("SILK_SURV_AGE_RATE", unset = "0.01107"))
-SURV_AGE_GROWTH <- as.numeric(Sys.getenv("SILK_SURV_AGE_GROWTH", unset = "0.540"))
+# Gompertz baseline on attained age. With the added X3/X4 variation, growth
+# 0.650 yields an age-only mean AUC near 0.817 while the retuned base rate keeps
+# the four-year event probability near 0.24.
+SURV_AGE_BASE_RATE <- as.numeric(Sys.getenv("SILK_SURV_AGE_RATE", unset = "0.00648"))
+SURV_AGE_GROWTH <- as.numeric(Sys.getenv("SILK_SURV_AGE_GROWTH", unset = "0.650"))
 SURV_BETA_A <- 0.95
-SURV_BETA_X1 <- 0.20
-SURV_BETA_X2 <- 0.15
+SURV_BETA_X1 <- as.numeric(Sys.getenv("SILK_SURV_BETA_X1", unset = "0.08"))
+SURV_BETA_X2 <- as.numeric(Sys.getenv("SILK_SURV_BETA_X2", unset = "0.08"))
+SURV_BETA_X3 <- as.numeric(Sys.getenv("SILK_SURV_BETA_X3", unset = "0.45"))
+SURV_BETA_X4 <- as.numeric(Sys.getenv("SILK_SURV_BETA_X4", unset = "0.40"))
+SURV_BETA_X3_SQ <- as.numeric(Sys.getenv("SILK_SURV_BETA_X3_SQ", unset = "0.35"))
 SURV_BETA_U <- 0.25
 CENS_RATE <- 0.045
 EVAL_HORIZON <- 4.0
@@ -106,8 +108,8 @@ PREDICTION_HORIZONS <- as.numeric(strsplit(Sys.getenv("SILK_HORIZONS", unset = "
 PREDICTION_HORIZONS <- sort(unique(PREDICTION_HORIZONS[is.finite(PREDICTION_HORIZONS) & PREDICTION_HORIZONS > 0]))
 if (!length(PREDICTION_HORIZONS)) PREDICTION_HORIZONS <- EVAL_HORIZON
 
-# All scenarios use exactly four biomarker channels. B1 has an additional
-# centered quadratic X1 effect; X2 is binary, so X2^2 would not be nonlinear.
+# All scenarios use exactly four biomarker channels. X3 and X4 dominate X1 and
+# X2, and B1 has an additional centered quadratic X3 effect.
 N_BIOMARKERS <- as.integer(Sys.getenv("SILK_N_BIOMARKERS", unset = "4"))
 if (!is.finite(N_BIOMARKERS) || N_BIOMARKERS < 1L) {
   stop("SILK_N_BIOMARKERS must be a positive integer.", call. = FALSE)
@@ -121,12 +123,17 @@ DIST_SD_BASE <- 0.45
 DIST_SD_SLOPE <- 0.18
 DEFAULT_SIGNAL_AMP <- 1.35
 DEFAULT_U_BIO_COEF <- 0.15
-BIO_BETA_X1 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X1", unset = "0.35"))
-BIO_BETA_X2 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X2", unset = "0.25"))
-BIO_BETA_X1_SQ <- as.numeric(Sys.getenv("SILK_BIO_BETA_X1_SQ", unset = "0.50"))
+BIO_BETA_X1 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X1", unset = "0.10"))
+BIO_BETA_X2 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X2", unset = "0.10"))
+BIO_BETA_X3 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X3", unset = "0.70"))
+BIO_BETA_X4 <- as.numeric(Sys.getenv("SILK_BIO_BETA_X4", unset = "0.60"))
+BIO_BETA_X3_SQ <- as.numeric(Sys.getenv("SILK_BIO_BETA_X3_SQ", unset = "0.80"))
 BIO_NONLINEAR_MARKER <- as.integer(Sys.getenv("SILK_BIO_NONLINEAR_MARKER", unset = "1"))
-if (any(!is.finite(c(BIO_BETA_X1, BIO_BETA_X2, BIO_BETA_X1_SQ)))) {
-  stop("The SILK biomarker-effect coefficients must be finite numbers.", call. = FALSE)
+if (any(!is.finite(c(
+  SURV_BETA_X1, SURV_BETA_X2, SURV_BETA_X3, SURV_BETA_X4, SURV_BETA_X3_SQ,
+  BIO_BETA_X1, BIO_BETA_X2, BIO_BETA_X3, BIO_BETA_X4, BIO_BETA_X3_SQ
+)))) {
+  stop("The SILK survival and biomarker covariate coefficients must be finite numbers.", call. = FALSE)
 }
 if (!is.finite(BIO_NONLINEAR_MARKER) ||
     BIO_NONLINEAR_MARKER < 1L || BIO_NONLINEAR_MARKER > N_BIOMARKERS) {
@@ -192,14 +199,15 @@ PROFILE_SEARCH_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_SEARCH_RADIUS", uns
 CLOCK_SIGNAL_MIN <- as.numeric(Sys.getenv("SILK_CLOCK_SIGNAL_MIN", unset = "0.10"))
 
 # ----------------------------- Methods ---------------------------------------
-# The roster has exactly twelve methods.
+# The roster has exactly fourteen methods.
 #
 # Biomarker-free clock benchmarks:
 #   Recorded-Cox, Recorded-Beran, Oracle-Cox, Oracle-Beran.
-# These use the relevant age coordinate and baseline covariates (X1, X2) only.
+# These use the relevant age coordinate only.
 #
 # Biomarker-using methods:
-#   the three SILK registration kernels, MMLM, JM, RSF, DeepSurv, and
+#   the three SILK registration kernels, correct/misspecified MMLM and JM,
+#   RSF, DeepSurv, and
 #   TimeError-Integrated-Landmark.
 # No history-augmented Cox variants or SILK-Beran variant are included.
 KERNEL_METHODS <- c(
@@ -213,8 +221,10 @@ METHODS <- c(
   ACTIVE_KERNEL_METHODS,
   "Recorded-Cox",
   "Recorded-Beran",
-  "MMLM",
-  "JM",
+  "MMLM-Correct",
+  "MMLM-Misspecified",
+  "JM-Correct",
+  "JM-Misspecified",
   "RSF",
   "DeepSurv",
   "TimeError-Integrated-Landmark",
@@ -235,8 +245,10 @@ PRIMARY_TRIPLE <- c(
 PRIMARY_COMPETITORS <- c(
   "Recorded-Cox",
   "Recorded-Beran",
-  "MMLM",
-  "JM",
+  "MMLM-Correct",
+  "MMLM-Misspecified",
+  "JM-Correct",
+  "JM-Misspecified",
   "RSF",
   "DeepSurv",
   "TimeError-Integrated-Landmark"
@@ -276,8 +288,8 @@ DEEPSURV_PATIENCE <- as.integer(Sys.getenv("SILK_DEEPSURV_PATIENCE", unset = "10
 
 # ----------------------------- Scenarios -------------------------------------
 # Error scales are fixed through age reliability, not selected by prediction
-# performance. With Var(A*) = 64/12, sigma 2.5 and 5 correspond to approximate
-# reliabilities 0.46 and 0.18, respectively.
+# performance. With Var(A*) = 64/12, sigma 6 and 12 correspond to approximate
+# reliabilities 0.13 and 0.036, respectively.
 SCENARIOS <- data.frame(
   scenario = SCENARIOS_ALL,
   biomarker_signal = c(
@@ -289,7 +301,7 @@ SCENARIOS <- data.frame(
   ),
   # Offsets scaled so the recorded clock is genuinely uninformative: age
   # reliability is 0.13 at sigma_eps = 6 and 0.036 at 12, giving recorded-age
-  # AUC 0.63 and 0.58 against an oracle of 0.81.
+  # four-year AUC near 0.62 and 0.58 against an age-only oracle near 0.83.
   sigma_eps = c(0, 6.0, 12.0, 12.0, 6.0, 12.0, 12.0, 12.0, 10.0, 12.0, 12.0, 12.0),
   eps_mean = c(0, 0, 0, 0, 0, 0, 0, 0, 6.0, 0, 0, 0),
   eps_type = c(
@@ -347,8 +359,10 @@ METHOD_LABELS <- c(
   "SILK-Matern32" = "SILK-Matérn-3/2",
   "Recorded-Cox" = "Recorded-Cox",
   "Recorded-Beran" = "Recorded-Beran",
-  "MMLM" = "MMLM",
-  "JM" = "JM",
+  "MMLM-Correct" = "MMLM-Correct",
+  "MMLM-Misspecified" = "MMLM-Misspecified",
+  "JM-Correct" = "JM-Correct",
+  "JM-Misspecified" = "JM-Misspecified",
   "RSF" = "RSF",
   "DeepSurv" = "DeepSurv",
   "TimeError-Integrated-Landmark" = "TimeError-Integrated-Landmark",
@@ -411,6 +425,9 @@ silk_options(
   SURV_BETA_A = SURV_BETA_A,
   SURV_BETA_X1 = SURV_BETA_X1,
   SURV_BETA_X2 = SURV_BETA_X2,
+  SURV_BETA_X3 = SURV_BETA_X3,
+  SURV_BETA_X4 = SURV_BETA_X4,
+  SURV_BETA_X3_SQ = SURV_BETA_X3_SQ,
   SURV_BETA_U = SURV_BETA_U,
   CENS_RATE = CENS_RATE,
   EVAL_HORIZON = EVAL_HORIZON,
@@ -426,7 +443,9 @@ silk_options(
   DEFAULT_U_BIO_COEF = DEFAULT_U_BIO_COEF,
   BIO_BETA_X1 = BIO_BETA_X1,
   BIO_BETA_X2 = BIO_BETA_X2,
-  BIO_BETA_X1_SQ = BIO_BETA_X1_SQ,
+  BIO_BETA_X3 = BIO_BETA_X3,
+  BIO_BETA_X4 = BIO_BETA_X4,
+  BIO_BETA_X3_SQ = BIO_BETA_X3_SQ,
   BIO_NONLINEAR_MARKER = BIO_NONLINEAR_MARKER,
   SHIFT_GRID_STEP = SHIFT_GRID_STEP,
   DEFAULT_SHIFT_GRID_MIN = DEFAULT_SHIFT_GRID_MIN,
@@ -436,7 +455,7 @@ silk_options(
   BIOMARKER_BANDWIDTH_SCALE = BIOMARKER_BANDWIDTH_SCALE,
   BIOMARKER_BANDWIDTH_MAX_POINTS = BIOMARKER_BANDWIDTH_MAX_POINTS,
   TEMPLATE_INPUT_FEATURES = TEMPLATE_INPUT_FEATURES,
-  TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "lag"),
+  TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "X3", "X4", "lag"),
   TEMPLATE_FEATURE_SEED = TEMPLATE_FEATURE_SEED,
   TEMPLATE_RIDGE_LAMBDA = TEMPLATE_RIDGE_LAMBDA,
   TEMPLATE_NUMERICAL_JITTER = TEMPLATE_NUMERICAL_JITTER,
@@ -444,6 +463,8 @@ silk_options(
   H_A_BANDWIDTH = H_A_BANDWIDTH,
   H_X_BANDWIDTH = H_X_BANDWIDTH,
   H_X2_BANDWIDTH = H_X2_BANDWIDTH,
+  H_X3_BANDWIDTH = H_X_BANDWIDTH,
+  H_X4_BANDWIDTH = H_X_BANDWIDTH,
   H_LAG_BANDWIDTH = H_LAG_BANDWIDTH,
   N_ALT_ITER_MAX = N_ALT_ITER_MAX,
   ALT_TOL = ALT_TOL,

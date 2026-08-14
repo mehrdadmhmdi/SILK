@@ -1,23 +1,38 @@
 # =============================================================================
 # methods_mmlm_recorded.R
-# MMLM: mixed-model landmarking on recorded time.
+# MMLM: correct and deliberately misspecified mixed-model landmarking.
 # A mixed model smooths the current biomarker value only; the landmark Cox model
 # uses baseline covariates, recorded landmark age, and that smoothed value.
 # Reference: Rizopoulos et al. dynamic prediction work; nlme::lme and survival.
 # =============================================================================
 
-fit_mmlm_recorded <- function(train_subjects, train_visits) {
-  marker_model <- fit_current_value_mixed_model(train_subjects, train_visits)
+fit_mmlm_recorded <- function(train_subjects, train_visits,
+                              specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
+  method <- if (specification == "correct") "MMLM-Correct" else "MMLM-Misspecified"
+  marker_model <- fit_current_value_mixed_model(
+    train_subjects, train_visits, specification = specification
+  )
   marker_hat <- predict_current_value_mixed_model(marker_model, train_subjects, train_visits)
   x <- landmark_covariates(
     train_subjects,
     train_visits,
     clock = "recorded",
     marker = marker_hat,
-    include_biomarker = TRUE
+    include_biomarker = TRUE,
+    covariate_specification = specification
   )
   fit <- fit_residual_cox(train_subjects, x)
-  list(method = "MMLM", marker_model = marker_model, fit = fit)
+  list(
+    method = method,
+    specification = specification,
+    marker_model = marker_model,
+    fit = fit,
+    implementation = paste0(
+      "Mixed-model landmarking with ", specification,
+      " longitudinal and event covariate specifications"
+    )
+  )
 }
 
 predict_mmlm_recorded <- function(fit, test_subjects, test_visits,
@@ -31,7 +46,8 @@ predict_mmlm_recorded <- function(fit, test_subjects, test_visits,
     test_visits,
     clock = "recorded",
     marker = marker_hat,
-    include_biomarker = TRUE
+    include_biomarker = TRUE,
+    covariate_specification = fit$specification
   )
   risk <- predict_residual_cox_risk(fit$fit, x, horizons)
   prediction_frame(

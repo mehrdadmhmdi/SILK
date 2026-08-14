@@ -109,13 +109,13 @@ sbatch job_validate.sbatch
 
 ### Exact method roster
 
-The simulation accepts exactly these 12 method IDs:
+The simulation accepts exactly these 14 method IDs:
 
 | Role | Methods | Longitudinal biomarkers in survival prediction? |
 |---|---|---|
 | Recorded-age bases | `Recorded-Cox`, `Recorded-Beran` | No |
 | SILK registration kernels | `SILK-Gaussian`, `SILK-Laplace`, `SILK-Matern32` | Yes, for registration |
-| Biomarker comparators | `MMLM`, `JM`, `RSF`, `DeepSurv`, `TimeError-Integrated-Landmark` | Yes |
+| Biomarker comparators | `MMLM-Correct`, `MMLM-Misspecified`, `JM-Correct`, `JM-Misspecified`, `RSF`, `DeepSurv`, `TimeError-Integrated-Landmark` | Yes |
 | Latent-age oracle bases | `Oracle-Cox`, `Oracle-Beran` | No |
 
 The four biomarker-free methods use only their stated age coordinate; no
@@ -124,6 +124,9 @@ feature enters those fits. The three SILK methods share
 the same survival layer, folds, seeds, and tuning, so the registration kernel
 is the only difference among them. No rich-history Cox, same-feature recorded
 Cox, SILK mean-regression, or extra Beran variant remains in the active design.
+`MMLM-Correct` and `JM-Correct` include `X1`, `X2`, `X3`, `X4`, and centered
+`X3^2` in both of their parametric submodels. Their misspecified partners are
+identical except that both submodels retain only `X1` and `X2`.
 
 ### Required validation before the confirmatory rerun
 
@@ -160,8 +163,8 @@ sbatch job_failed_comparators.sbatch
 ```
 
 This submits one unthrottled CPU job array over the existing 4,800 design
-tasks, with a two-hour limit per task, but evaluates only `JM` and
-`DeepSurv`. It does not rerun SILK or any successful comparator, does
+tasks, with a two-hour limit per task, but evaluates only `JM-Correct`,
+`JM-Misspecified`, and `DeepSurv`. It does not rerun SILK or any successful comparator, does
 not overwrite the original results, and does not launch manuscript figures.
 The corrected JM implementation is rerun for every design cell so one reported
 method is not assembled from two different internal time definitions. The

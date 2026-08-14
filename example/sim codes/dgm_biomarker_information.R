@@ -8,7 +8,8 @@
 # shift-invariant history, not on the latent age; this script is not a check on
 # SILK. It characterizes the DGM. If a flexible regression of A* on the landmark
 # biomarkers alone is already near-exact, then any comparator that enters raw
-# biomarkers into a residual-time hazard model (MMLM, JM, RSF, DeepSurv) obtains
+# biomarkers into a residual-time hazard model (both MMLM/JM specifications,
+# RSF, and DeepSurv) obtains
 # the stage coordinate directly and needs no registration. That is a property of
 # the simulation design, and it is the quantity that should drive the design of
 # a prespecified stress-test suite -- not a post-hoc reaction to an unfavorable

@@ -284,6 +284,8 @@ template_covariate_bandwidth <- function(name) {
     name,
     X1 = silk_opt("H_X_BANDWIDTH"),
     X2 = silk_opt("H_X2_BANDWIDTH"),
+    X3 = silk_opt("H_X3_BANDWIDTH"),
+    X4 = silk_opt("H_X4_BANDWIDTH"),
     lag = silk_opt("H_LAG_BANDWIDTH"),
     1
   )

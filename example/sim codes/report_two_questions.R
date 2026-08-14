@@ -77,8 +77,10 @@ TRIPLES <- list(
 PRIMARY_COMPETITORS <- c(
   "Recorded-Cox",
   "Recorded-Beran",
-  "MMLM",
-  "JM",
+  "MMLM-Correct",
+  "MMLM-Misspecified",
+  "JM-Correct",
+  "JM-Misspecified",
   "RSF",
   "DeepSurv",
   "TimeError-Integrated-Landmark"

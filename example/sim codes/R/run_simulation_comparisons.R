@@ -68,8 +68,18 @@ fit_one_prediction_method <- function(method, train, cell, seed_base,
     method,
     "Recorded-Cox" = fit_recorded_cox(train$subjects),
     "Recorded-Beran" = fit_recorded_beran(train$subjects),
-    "MMLM" = fit_mmlm_recorded(train$subjects, train$visits),
-    "JM" = fit_jm_recorded(train$subjects, train$visits),
+    "MMLM-Correct" = fit_mmlm_recorded(
+      train$subjects, train$visits, specification = "correct"
+    ),
+    "MMLM-Misspecified" = fit_mmlm_recorded(
+      train$subjects, train$visits, specification = "misspecified"
+    ),
+    "JM-Correct" = fit_jm_recorded(
+      train$subjects, train$visits, specification = "correct"
+    ),
+    "JM-Misspecified" = fit_jm_recorded(
+      train$subjects, train$visits, specification = "misspecified"
+    ),
     "DeepSurv" = fit_deepsurv_observed(
       train$subjects, train$visits, seed = seed_base + 709L
     ),
@@ -111,8 +121,10 @@ predict_one_prediction_method <- function(method, fit, test, cell, horizons = PR
     method,
     "Recorded-Cox" = do.call(predict_recorded_cox, c(list(fit, test$subjects), args)),
     "Recorded-Beran" = do.call(predict_recorded_beran, c(list(fit, test$subjects), args)),
-    "MMLM" = do.call(predict_mmlm_recorded, c(list(fit, test$subjects, test$visits), args)),
-    "JM" = do.call(predict_jm_recorded, c(list(fit, test$subjects, test$visits), args)),
+    "MMLM-Correct" = do.call(predict_mmlm_recorded, c(list(fit, test$subjects, test$visits), args)),
+    "MMLM-Misspecified" = do.call(predict_mmlm_recorded, c(list(fit, test$subjects, test$visits), args)),
+    "JM-Correct" = do.call(predict_jm_recorded, c(list(fit, test$subjects, test$visits), args)),
+    "JM-Misspecified" = do.call(predict_jm_recorded, c(list(fit, test$subjects, test$visits), args)),
     "DeepSurv" = do.call(predict_deepsurv_observed, c(list(fit, test$subjects, test$visits), args)),
     "RSF" = do.call(predict_rsf_observed, c(list(fit, test$subjects, test$visits), args)),
     "TimeError-Integrated-Landmark" = do.call(predict_timeerror_integrated_landmark, c(list(fit, test$subjects, test$visits), args)),

@@ -55,14 +55,19 @@ silk_default_options <- function() {
     # therefore how much discrimination registration can recover. At the former
     # growth 0.18 the linear predictor had SD 0.47 and the Bayes-optimal mean
     # AUC was 0.640, leaving a recorded-versus-latent gap of only 0.055 AUC.
-    # At growth 0.540 the linear predictor has SD 1.27, the Bayes-optimal mean
-    # AUC is 0.808, and the gap widens to 0.153. The base rate is retuned to
-    # 0.01098 so the four-year event rate stays at 0.24 as before.
-    SURV_AGE_BASE_RATE = 0.01107,
-    SURV_AGE_GROWTH = 0.540,
+    # Growth 0.650 offsets the added prognostic variation from X3/X4: a
+    # 500,000-draw design pilot gave age-only AUCs 0.805--0.833 (mean 0.817).
+    # The base rate keeps the four-year event probability near 0.24.
+    SURV_AGE_BASE_RATE = 0.00648,
+    SURV_AGE_GROWTH = 0.650,
     SURV_BETA_A = 0.95,
-    SURV_BETA_X1 = 0.20,
-    SURV_BETA_X2 = 0.15,
+    # X3 and X4 are deliberately much stronger prognostic covariates than X1
+    # and X2. The centered nonlinear X3 term is part of the correct event model.
+    SURV_BETA_X1 = 0.08,
+    SURV_BETA_X2 = 0.08,
+    SURV_BETA_X3 = 0.45,
+    SURV_BETA_X4 = 0.40,
+    SURV_BETA_X3_SQ = 0.35,
     SURV_BETA_U = 0.25,
 
     # Origin-error shape constants (see r_common_shift in data-generation.R).
@@ -87,12 +92,13 @@ silk_default_options <- function() {
     DIST_SD_SLOPE = 0.18,
     DEFAULT_SIGNAL_AMP = 1.35,
     DEFAULT_U_BIO_COEF = 0.15,
-    # Strong observed-covariate effects shared by the biomarker channels.
-    # B1 additionally receives the centered nonlinear term
-    # BIO_BETA_X1_SQ * (X1^2 - 1). X2 is Bernoulli, so X2^2 would equal X2.
-    BIO_BETA_X1 = 0.35,
-    BIO_BETA_X2 = 0.25,
-    BIO_BETA_X1_SQ = 0.50,
+    # X3 and X4 deliberately dominate X1 and X2 in the biomarker process.
+    # B1 additionally receives BIO_BETA_X3_SQ * (X3^2 - 1).
+    BIO_BETA_X1 = 0.10,
+    BIO_BETA_X2 = 0.10,
+    BIO_BETA_X3 = 0.70,
+    BIO_BETA_X4 = 0.60,
+    BIO_BETA_X3_SQ = 0.80,
     BIO_NONLINEAR_MARKER = 1L,
 
     # Registration
@@ -112,7 +118,7 @@ silk_default_options <- function() {
     # A fixed Fourier map defines the scalar template-input kernel only. It is
     # not an approximation to the biomarker kernel or its RKHS loss.
     TEMPLATE_INPUT_FEATURES = 16L,
-    TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "lag"),
+    TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "X3", "X4", "lag"),
     TEMPLATE_FEATURE_SEED = 271828L,
     TEMPLATE_RIDGE_LAMBDA = 0.001,
     TEMPLATE_NUMERICAL_JITTER = 1e-10,
@@ -120,6 +126,8 @@ silk_default_options <- function() {
     H_A_BANDWIDTH = 1.00,
     H_X_BANDWIDTH = 1.50,
     H_X2_BANDWIDTH = 1.00,
+    H_X3_BANDWIDTH = 1.50,
+    H_X4_BANDWIDTH = 1.50,
     H_LAG_BANDWIDTH = 0.50,
     N_ALT_ITER_MAX = 7L,
     ALT_TOL = 1e-3,
@@ -179,13 +187,17 @@ silk_default_options <- function() {
     METHODS = c(
       "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
       "Recorded-Cox", "Recorded-Beran",
-      "MMLM", "JM", "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
+      "MMLM-Correct", "MMLM-Misspecified",
+      "JM-Correct", "JM-Misspecified",
+      "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
       "Oracle-Cox", "Oracle-Beran"
     ),
     METHOD_ORDER = c(
       "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
       "Recorded-Cox", "Recorded-Beran",
-      "MMLM", "JM", "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
+      "MMLM-Correct", "MMLM-Misspecified",
+      "JM-Correct", "JM-Misspecified",
+      "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
       "Oracle-Cox", "Oracle-Beran"
     ),
 
@@ -222,7 +234,7 @@ silk_default_options <- function() {
       u_bio_coef = rep(0, 12),
       dist_sd_base = c(0.45, 0.45, 0.45, 0.45, 0.36, 0.22, 0.14, 0.45, 0.45, 0.45, 0.45, 0.45),
       dist_sd_slope = c(0.18, 0.18, 0.18, 0.18, 0.35, 0.85, 1.25, 0.18, 0.18, 0.18, 0.18, 0.18),
-      risk_age_growth = rep(0.540, 12),
+      risk_age_growth = rep(0.650, 12),
       risk_beta_U = rep(0, 12),
       description = c(
         "No origin error; calibration should not help and may add noise.",
@@ -264,8 +276,10 @@ silk_default_options <- function() {
       "SILK-Matern32" = "SILK-Matérn-3/2",
       "Recorded-Cox" = "Recorded-Cox",
       "Recorded-Beran" = "Recorded-Beran",
-      "MMLM" = "MMLM",
-      "JM" = "JM",
+      "MMLM-Correct" = "MMLM-Correct",
+      "MMLM-Misspecified" = "MMLM-Misspecified",
+      "JM-Correct" = "JM-Correct",
+      "JM-Misspecified" = "JM-Misspecified",
       "RSF" = "RSF",
       "DeepSurv" = "DeepSurv",
       "TimeError-Integrated-Landmark" = "TimeError-Integrated-Landmark",

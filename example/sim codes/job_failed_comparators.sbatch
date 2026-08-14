@@ -33,7 +33,7 @@ fi
 export SILK_PACKAGE_REF="${SILK_PACKAGE_REF:-$DEFAULT_PACKAGE_REF}"
 export SILK_N_REP="${SILK_N_REP:-50}"
 export SILK_ENABLE_JMBAYES2=true
-export SILK_ONLY_METHODS="JM,DeepSurv"
+export SILK_ONLY_METHODS="JM-Correct,JM-Misspecified,DeepSurv"
 export SILK_OUT_DIR="${SILK_REPAIR_OUT_DIR:-$SIM_DIR/outputs-failed-comparators}"
 
 echo "SILK failed-comparator repair"

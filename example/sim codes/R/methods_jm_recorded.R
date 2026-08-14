@@ -1,6 +1,6 @@
 # =============================================================================
 # methods_jm_recorded.R
-# JM: current-value joint-model comparator using recorded biomarkers.
+# JM: correct and deliberately misspecified current-value joint models.
 # Uses a simple current-value association between one longitudinal biomarker and
 # the event process. Internally, time is expressed as positive follow-up time
 # relative to each subject's recorded landmark. This is the usual landmark
@@ -41,24 +41,38 @@ prepare_jm_followup_clock <- function(subjects, visits,
   list(subjects = out_subjects, visits = out_visits)
 }
 
-fit_jm_longitudinal_model <- function(visits) {
+fit_jm_longitudinal_model <- function(visits,
+                                      specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
   if (!requireNamespace("nlme", quietly = TRUE)) {
     stop("JM requires the nlme package.", call. = FALSE)
   }
   biomarker <- first_biomarker_col(visits)
   dat <- visits
   dat$marker_value <- as.numeric(dat[[biomarker]])
-  required <- c("id", "marker_value", "A_obs_il", "X1", "X2")
+  fixed_covariates <- if (specification == "correct") {
+    c("X1", "X2", "X3", "X4", "X3_sq")
+  } else {
+    c("X1", "X2")
+  }
+  if (specification == "correct") dat$X3_sq <- dat$X3^2 - 1
+  required <- c("id", "marker_value", "A_obs_il", fixed_covariates)
   dat <- dat[stats::complete.cases(dat[, required, drop = FALSE]), , drop = FALSE]
   dat$id <- droplevels(factor(dat$id))
   if (!nrow(dat) || length(unique(dat$id)) < 2L) {
     stop("JM has insufficient complete longitudinal observations.", call. = FALSE)
   }
 
+  fixed_formula <- if (specification == "correct") {
+    marker_value ~ A_obs_il + X1 + X2 + X3 + X4 + X3_sq
+  } else {
+    marker_value ~ A_obs_il + X1 + X2
+  }
+
   fit_one <- function(random_formula) {
     tryCatch(
       suppressWarnings(nlme::lme(
-        marker_value ~ A_obs_il + X1 + X2,
+        fixed_formula,
         random = random_formula,
         data = dat,
         na.action = stats::na.omit,
@@ -82,10 +96,19 @@ fit_jm_longitudinal_model <- function(visits) {
   if (is.null(fit)) {
     stop("JM could not fit either longitudinal mixed model.", call. = FALSE)
   }
-  list(fit = fit, biomarker = biomarker, random_structure = random_structure)
+  list(
+    fit = fit,
+    biomarker = biomarker,
+    random_structure = random_structure,
+    specification = specification,
+    fixed_covariates = fixed_covariates
+  )
 }
 
-fit_jm_recorded <- function(train_subjects, train_visits) {
+fit_jm_recorded <- function(train_subjects, train_visits,
+                            specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
+  method <- if (specification == "correct") "JM-Correct" else "JM-Misspecified"
   if (!isTRUE(ENABLE_JMBAYES2)) {
     stop("JM requires SILK_ENABLE_JMBAYES2=true; method marked unavailable for this run.", call. = FALSE)
   }
@@ -96,16 +119,24 @@ fit_jm_recorded <- function(train_subjects, train_visits) {
   jm_data <- prepare_jm_followup_clock(train_subjects, train_visits)
   jm_subjects <- jm_data$subjects
   jm_visits <- jm_data$visits
-  marker_model <- fit_jm_longitudinal_model(jm_visits)
+  marker_model <- fit_jm_longitudinal_model(jm_visits, specification)
 
   event_dat <- data.frame(
     id = jm_subjects$id,
     Y_obs = pmin(jm_subjects$T_obs, jm_subjects$C_obs),
     status = jm_subjects$delta,
     X1 = jm_subjects$X1,
-    X2 = jm_subjects$X2
+    X2 = jm_subjects$X2,
+    X3 = jm_subjects$X3,
+    X4 = jm_subjects$X4,
+    X3_sq = jm_subjects$X3^2 - 1
   )
-  cox_fit <- survival::coxph(survival::Surv(Y_obs, status) ~ X1 + X2, data = event_dat, x = TRUE)
+  event_formula <- if (specification == "correct") {
+    survival::Surv(Y_obs, status) ~ X1 + X2 + X3 + X4 + X3_sq
+  } else {
+    survival::Surv(Y_obs, status) ~ X1 + X2
+  }
+  cox_fit <- survival::coxph(event_formula, data = event_dat, x = TRUE)
   jm_fit <- JMbayes2::jm(
     cox_fit,
     marker_model$fit,
@@ -116,13 +147,15 @@ fit_jm_recorded <- function(train_subjects, train_visits) {
   )
 
   list(
-    method = "JM",
+    method = method,
+    specification = specification,
     marker_model = marker_model,
     cox_fit = cox_fit,
     jm_fit = jm_fit,
     landmark_time = JMBAYES_LANDMARK_TIME,
     implementation = paste0(
-      "JMbayes2 current-value dynamic prediction on a recorded-landmark follow-up clock; ",
+      "JMbayes2 current-value dynamic prediction with the ", specification,
+      " covariate specification on a recorded-landmark follow-up clock; ",
       marker_model$random_structure
     )
   )
@@ -145,7 +178,10 @@ extract_jmbayes2_event_risk <- function(pred, target_times) {
   risk_cols <- setdiff(risk_cols, time_col)
   if (!length(risk_cols)) {
     numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
-    risk_cols <- setdiff(numeric_cols, c(time_col, "id", "X1", "X2", "Y_obs", "status", "A_obs_il"))
+    risk_cols <- setdiff(
+      numeric_cols,
+      c(time_col, "id", "X1", "X2", "X3", "X4", "X3_sq", "Y_obs", "status", "A_obs_il")
+    )
   }
   if (!length(risk_cols)) stop("Could not identify the JMbayes2 event-risk column.", call. = FALSE)
   risk <- as.numeric(df[[risk_cols[1]]])
@@ -196,7 +232,13 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
     sv$A_obs_il <- as.numeric(sv$A_obs_il) - as.numeric(test_subjects$A_obs[i]) + landmark_time
     sv$X1 <- test_subjects$X1[i]
     sv$X2 <- test_subjects$X2[i]
-    required_finite <- is.finite(sv$A_obs_il) & is.finite(sv$X1) & is.finite(sv$X2)
+    sv$X3 <- test_subjects$X3[i]
+    sv$X4 <- test_subjects$X4[i]
+    sv$X3_sq <- sv$X3^2 - 1
+    required_finite <- is.finite(sv$A_obs_il)
+    for (nm in fit$marker_model$fixed_covariates) {
+      required_finite <- required_finite & is.finite(sv[[nm]])
+    }
     sv <- sv[required_finite, , drop = FALSE]
     if (!nrow(sv)) {
       stop("JM has no finite longitudinal times for test subject ", subject_id, ".", call. = FALSE)

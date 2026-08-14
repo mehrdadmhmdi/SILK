@@ -5,8 +5,10 @@ testthat::test_that("the method roster is exact and contains no legacy variants"
     "SILK-Matern32",
     "Recorded-Cox",
     "Recorded-Beran",
-    "MMLM",
-    "JM",
+    "MMLM-Correct",
+    "MMLM-Misspecified",
+    "JM-Correct",
+    "JM-Misspecified",
     "RSF",
     "DeepSurv",
     "TimeError-Integrated-Landmark",
@@ -56,4 +58,21 @@ testthat::test_that("the four benchmarks fit age alone", {
 
 testthat::test_that("SILK defaults to the Gaussian method ID", {
   testthat::expect_identical(eval(formals(fit_silk)$method), "SILK-Gaussian")
+})
+
+testthat::test_that("binary AUC does not overflow for large samples", {
+  y <- rep(c(0L, 1L), each = 50000L)
+  score <- seq_along(y)
+  testthat::expect_equal(binary_auc(y, score), 1)
+})
+
+testthat::test_that("correct and misspecified feature maps differ only as designed", {
+  subjects <- data.frame(X1 = 1:3, X2 = c(0, 1, 0), X3 = c(-1, 0, 2), X4 = c(2, -1, 0))
+  correct <- SILK:::base_covariates(subjects, "correct")
+  misspecified <- SILK:::base_covariates(subjects, "misspecified")
+
+  testthat::expect_identical(colnames(correct), c("X1", "X2", "X3", "X4", "X3_sq"))
+  testthat::expect_identical(colnames(misspecified), c("X1", "X2"))
+  testthat::expect_equal(correct[, c("X1", "X2")], misspecified)
+  testthat::expect_equal(correct[, "X3_sq"], subjects$X3^2 - 1)
 })

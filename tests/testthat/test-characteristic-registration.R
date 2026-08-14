@@ -88,6 +88,8 @@ test_that("missing visits retain nominal schedule positions", {
     eps = 0,
     X1 = 0,
     X2 = 0,
+    X3 = 0,
+    X4 = 0,
     U_latent = 0
   )
   scenario <- data.frame(
@@ -118,21 +120,26 @@ test_that("the primary DGM uses an attained-age hazard and a stage-null control"
   expect_equal(control$risk_beta_U, 0)
 })
 
-test_that("all scenarios use four biomarkers and B1 has the nonlinear X1 effect", {
+test_that("all scenarios use four biomarkers and B1 has the nonlinear X3 effect", {
   scenarios <- silk_opt("SCENARIOS")
   expect_equal(scenarios$n_biomarkers, rep(4L, nrow(scenarios)))
 
   X1 <- c(-1, 0, 1, 2)
   X2 <- c(0, 1, 0, 1)
-  effects <- SILK:::biomarker_covariate_matrix(X1, X2, p = 4L)
-  linear <- silk_opt("BIO_BETA_X1") * X1 + silk_opt("BIO_BETA_X2") * X2
-  quadratic <- silk_opt("BIO_BETA_X1_SQ") * (X1^2 - 1)
+  X3 <- c(-2, -1, 0, 1)
+  X4 <- c(1, -1, 2, 0)
+  effects <- SILK:::biomarker_covariate_matrix(X1, X2, X3, X4, p = 4L)
+  linear <- silk_opt("BIO_BETA_X1") * X1 + silk_opt("BIO_BETA_X2") * X2 +
+    silk_opt("BIO_BETA_X3") * X3 + silk_opt("BIO_BETA_X4") * X4
+  quadratic <- silk_opt("BIO_BETA_X3_SQ") * (X3^2 - 1)
 
   expect_equal(dim(effects), c(length(X1), 4L))
   expect_equal(effects[, 1L], linear + quadratic)
   expect_equal(effects[, 2L], linear)
   expect_equal(effects[, 3L], linear)
   expect_equal(effects[, 4L], linear)
+  expect_gt(abs(silk_opt("BIO_BETA_X3")), abs(silk_opt("BIO_BETA_X1")))
+  expect_gt(abs(silk_opt("BIO_BETA_X4")), abs(silk_opt("BIO_BETA_X2")))
 })
 
 test_that("SILK-Cox reuses each exact characteristic registration", {

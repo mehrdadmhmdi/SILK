@@ -278,9 +278,17 @@ predict_age_scale_cox_risk <- function(model, landmark_age, x_new, horizons) {
   clip_probability(risk)
 }
 
-base_covariates <- function(subjects) {
-  out <- as.matrix(subjects[, c("X1", "X2"), drop = FALSE])
-  colnames(out) <- c("X1", "X2")
+base_covariates <- function(subjects, specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
+  columns <- if (specification == "correct") c("X1", "X2", "X3", "X4") else c("X1", "X2")
+  missing <- setdiff(columns, names(subjects))
+  if (length(missing)) {
+    stop("Missing baseline covariates: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  out <- as.matrix(subjects[, columns, drop = FALSE])
+  if (specification == "correct") {
+    out <- cbind(out, X3_sq = as.numeric(subjects$X3)^2 - 1)
+  }
   out
 }
 
@@ -306,18 +314,23 @@ current_marker_value <- function(subjects, visits, clock = c("recorded", "latent
   out
 }
 
-beran_state_covariates <- function(subjects, stage = NULL, include_x = TRUE) {
+beran_state_covariates <- function(subjects, stage = NULL, include_x = TRUE,
+                                   covariate_specification = "correct") {
   if (is.null(stage)) stage <- subjects$A_obs
   x <- cbind(landmark_age = as.numeric(stage))
-  if (isTRUE(include_x)) x <- cbind(x, base_covariates(subjects))
+  if (isTRUE(include_x)) x <- cbind(x, base_covariates(subjects, covariate_specification))
   x
 }
 
 landmark_covariates <- function(subjects, visits = NULL, clock = c("recorded", "latent"),
-                                marker = NULL, include_biomarker = TRUE) {
+                                marker = NULL, include_biomarker = TRUE,
+                                covariate_specification = "correct") {
   clock <- match.arg(clock)
   landmark <- if (clock == "recorded") subjects$A_obs else subjects$A_star
-  x <- cbind(landmark_age = landmark, base_covariates(subjects))
+  x <- cbind(
+    landmark_age = landmark,
+    base_covariates(subjects, covariate_specification)
+  )
   if (isTRUE(include_biomarker)) {
     if (is.null(marker)) {
       if (is.null(visits)) {
@@ -331,13 +344,18 @@ landmark_covariates <- function(subjects, visits = NULL, clock = c("recorded", "
 }
 
 observed_profile_covariates <- function(subjects, visits = NULL,
-                                        include_biomarker = OBSERVED_ML_USE_CURRENT_BIOMARKER) {
+                                        include_biomarker = OBSERVED_ML_USE_CURRENT_BIOMARKER,
+                                        covariate_specification = "correct") {
   if (isTRUE(include_biomarker) && !is.null(visits)) {
     return(landmark_covariates(
-      subjects, visits, clock = "recorded", include_biomarker = TRUE
+      subjects, visits, clock = "recorded", include_biomarker = TRUE,
+      covariate_specification = covariate_specification
     ))
   }
-  cbind(landmark_age = subjects$A_obs, base_covariates(subjects))
+  cbind(
+    landmark_age = subjects$A_obs,
+    base_covariates(subjects, covariate_specification)
+  )
 }
 
 align_covariate_columns <- function(x, column_names) {
@@ -349,17 +367,31 @@ align_covariate_columns <- function(x, column_names) {
   x[, column_names, drop = FALSE]
 }
 
-fit_current_value_mixed_model <- function(subjects, visits) {
+fit_current_value_mixed_model <- function(subjects, visits,
+                                          specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
   b <- first_biomarker_col(visits)
   dat <- visits
   dat$marker_value <- dat[[b]]
+  if (specification == "correct") {
+    missing <- setdiff(c("X1", "X2", "X3", "X4"), names(dat))
+    if (length(missing)) {
+      stop("Correct mixed model is missing: ", paste(missing, collapse = ", "), call. = FALSE)
+    }
+    dat$X3_sq <- dat$X3^2 - 1
+  }
   dat$id <- factor(dat$id)
+  fixed_formula <- if (specification == "correct") {
+    marker_value ~ A_obs_il + X1 + X2 + X3 + X4 + X3_sq
+  } else {
+    marker_value ~ A_obs_il + X1 + X2
+  }
   fit <- NULL
   if (requireNamespace("nlme", quietly = TRUE)) {
     fit <- tryCatch(
       suppressWarnings(
         nlme::lme(
-          marker_value ~ A_obs_il + X1 + X2,
+          fixed_formula,
           random = ~ A_obs_il | id,
           data = dat,
           control = nlme::lmeControl(maxIter = 100, msMaxIter = 100, niterEM = 50, returnObject = TRUE)
@@ -384,6 +416,7 @@ fit_current_value_mixed_model <- function(subjects, visits) {
   }
   list(
     fit = fit,
+    specification = specification,
     biomarker = b,
     fixed_effects = fixed_effects,
     random_cov = random_cov,
@@ -408,12 +441,20 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
   b <- model$biomarker
   pred <- locf
 
-  fixed_design <- function(a_obs, x1, x2) {
+  fixed_design <- function(a_obs, data) {
+    n <- length(a_obs)
+    value <- function(name) {
+      if (name %in% names(data)) as.numeric(data[[name]]) else rep(0, n)
+    }
+    x3 <- value("X3")
     X <- cbind(
       "(Intercept)" = 1,
       A_obs_il = as.numeric(a_obs),
-      X1 = as.numeric(x1),
-      X2 = as.numeric(x2)
+      X1 = value("X1"),
+      X2 = value("X2"),
+      X3 = x3,
+      X4 = value("X4"),
+      X3_sq = x3^2 - 1
     )
     X[, names(beta), drop = FALSE]
   }
@@ -433,7 +474,7 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
     if (!nrow(sv) || !b %in% names(sv)) next
 
     y <- as.numeric(sv[[b]])
-    X <- fixed_design(sv$A_obs_il, sv$X1, sv$X2)
+    X <- fixed_design(sv$A_obs_il, sv)
     Z <- random_design(sv$A_obs_il)
     keep <- is.finite(y) & apply(X, 1, function(row) all(is.finite(row))) &
       apply(Z, 1, function(row) all(is.finite(row)))
@@ -449,7 +490,7 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
       as.numeric(D %*% t(Z) %*% solve(V, resid)),
       error = function(e) rep(0, ncol(D))
     )
-    X0 <- fixed_design(subjects$A_obs[i], subjects$X1[i], subjects$X2[i])
+    X0 <- fixed_design(subjects$A_obs[i], subjects[i, , drop = FALSE])
     Z0 <- random_design(subjects$A_obs[i])
     val <- as.numeric(X0 %*% beta + Z0 %*% bhat)
     if (is.finite(val)) pred[i] <- val

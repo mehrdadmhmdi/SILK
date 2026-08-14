@@ -18,7 +18,7 @@ SIM_DIR="$(cd "$SIM_DIR" && pwd)"
 export SILK_SIM_DIR="$SIM_DIR"
 
 # Exact smoke-test design:
-#   - all 12 error scenarios and all 12 methods
+#   - all 12 error scenarios and all 14 methods
 #   - n_train = 400
 #   - R = 2 Monte Carlo replications
 #   - primary design only, forcing the m4 (four-visit) schedule

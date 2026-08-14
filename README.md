@@ -53,17 +53,20 @@ metrics$summary
 
 ## Comparators and Diagnostics
 
-The simulation roster contains exactly 12 methods. Four benchmarks deliberately
+The simulation roster contains exactly 14 methods. Four benchmarks deliberately
 exclude longitudinal biomarkers: `Recorded-Cox`, `Recorded-Beran`,
 `Oracle-Cox`, and `Oracle-Beran`. Their exported interfaces are
 `fit_recorded_cox()`, `fit_recorded_beran()`, `fit_oracle_cox()`, and
 `fit_oracle_beran()`; the recorded methods use recorded age only, while the
 oracle methods use latent true age only.
 
-The eight biomarker-using methods are `SILK-Gaussian`, `SILK-Laplace`,
-`SILK-Matern32`, `MMLM`, `JM`, `RSF`, `DeepSurv`, and
-`TimeError-Integrated-Landmark`. The three SILK entries differ only in their
-registration kernel.
+The ten biomarker-using methods are `SILK-Gaussian`, `SILK-Laplace`,
+`SILK-Matern32`, `MMLM-Correct`, `MMLM-Misspecified`, `JM-Correct`,
+`JM-Misspecified`, `RSF`, `DeepSurv`, and `TimeError-Integrated-Landmark`.
+The correct parametric models use `X1`, `X2`, `X3`, `X4`, and centered `X3^2`;
+their misspecified partners deliberately omit `X3`, `X4`, and `X3^2` from both
+the longitudinal and event submodels. The three SILK entries differ only in
+their registration kernel.
 
 Registration fits carry profile-gap diagnostics (`gap`, `gap_q1`, and
 `gap_q2`) so weakly identified shift profiles can be flagged instead of treated
