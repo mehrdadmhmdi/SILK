@@ -142,6 +142,52 @@ test_that("all scenarios use four biomarkers and B1 has the nonlinear X3 effect"
   expect_gt(abs(silk_opt("BIO_BETA_X4")), abs(silk_opt("BIO_BETA_X2")))
 })
 
+test_that("the clock kernel uses the complete covariate-adjusted biomarker history", {
+  local_silk_options(
+    CLOCK_NEIGHBOR_FRACTIONS = c(0.25, 0.50),
+    CLOCK_MIN_NEIGHBORS = 2L,
+    CLOCK_CV_TOLERANCE = 0,
+    CLOCK_PATH_MISSING_WEIGHT = 0.5
+  )
+  dat <- generate_dataset_fixed(24, "mean_moderate", schedule_name = "m4", seed = 19)
+  model <- SILK:::fit_clock_path_model(dat$visits, dat$subjects, "gaussian")
+
+  expect_identical(model$biomarker_columns, paste0("B", 1:4))
+  expect_identical(
+    model$residualizer$covariates,
+    c("X1", "X2", "X3", "X4", "X3_sq")
+  )
+  expect_equal(nrow(model$train_features), nrow(dat$subjects))
+  expect_equal(
+    ncol(model$train_features),
+    4L * 4L + 4L
+  )
+  expect_true(model$n_neighbors %in% SILK:::clock_neighbour_candidates(24L))
+
+  altered <- dat$visits
+  altered$B4[altered$id == altered$id[1L]] <-
+    altered$B4[altered$id == altered$id[1L]] + 10
+  original_path <- SILK:::clock_path_matrix(dat$visits, model)$features
+  altered_path <- SILK:::clock_path_matrix(altered, model)$features
+  expect_false(isTRUE(all.equal(original_path[1L, ], altered_path[1L, ])))
+})
+
+test_that("clock-neighbour near ties do not force maximal smoothing", {
+  local_silk_options(
+    CLOCK_NEIGHBOR_FRACTIONS = c(0.20, 0.50, 0.80),
+    CLOCK_MIN_NEIGHBORS = 1L,
+    CLOCK_CV_TOLERANCE = 0
+  )
+  # With zero off-diagonal similarities every candidate falls back to the same
+  # mean prediction, so all candidate errors tie exactly.
+  kernel <- diag(10)
+  response <- seq_len(10)
+  expect_identical(
+    SILK:::select_clock_neighbour_count(kernel, response),
+    2L
+  )
+})
+
 test_that("SILK-Cox reuses each exact characteristic registration", {
   local_silk_options(
     N_FOLDS = 2L,

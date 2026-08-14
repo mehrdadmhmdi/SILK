@@ -2,10 +2,9 @@
 
 R package implementing SILK for absolute-risk prediction in the presence of
 common origin-time measurement error. The registration layer uses an exact
-Gaussian RBF kernel on standardized biomarker vectors. Because that biomarker
-kernel is characteristic, the implemented RKHS loss retains the
-distribution-identification premise of the method's theory; it is not replaced
-by engineered biomarker moments or a finite biomarker feature map.
+characteristic kernel on standardized biomarker vectors: Gaussian RBF by
+default, with Laplace and Matern-3/2 alternatives. The implemented RKHS loss is
+not replaced by engineered biomarker moments or a finite biomarker feature map.
 
 ## Installation
 
@@ -18,84 +17,70 @@ install.packages("remotes")
 remotes::install_git("https://github.com/mehrdadmhmdi/SILK.git", dependencies = TRUE)
 ```
 
-## Quick Start
+## Data layout
+
+SILK expects one subject-level table and one longitudinal visit table. The
+subject table must contain `id`, recorded landmark age `A_obs`, follow-up time
+`U`, event indicator `delta`, and the baseline analysis variables `X1`--`X4`.
+The visit table must contain `id`, nominal visit position `visit`, time before
+the landmark `lag`, recorded visit age `A_obs_il`, the same baseline variables,
+and biomarker columns named `B1`, `B2`, and so on.
+
+The package derives the centered nonlinear term `X3^2 - 1` internally for the
+survival layer. Rename or construct these analysis columns before fitting if
+the source dataset uses different names.
+
+## Analysis example
 
 ```r
 library(SILK)
 
-# Generate simulated data under moderate origin error
-train_data <- generate_dataset_fixed(n = 400, scenario_name = "mean_moderate", seed = 1)
-test_data  <- generate_dataset_fixed(n = 200, scenario_name = "mean_moderate", seed = 2)
+# Replace these paths with the prepared analysis tables.
+train_subjects <- read.csv("train_subjects.csv")
+train_visits   <- read.csv("train_visits.csv")
+test_subjects  <- read.csv("test_subjects.csv")
+test_visits    <- read.csv("test_visits.csv")
 
-# Fit SILK. The shift range is a candidate registration range, not an
-# assumed error scenario.
-fit <- fit_silk(train_data$subjects, train_data$visits,
-                shift_range = c(-12, 12), seed = 1)
-
-# Fit the registration once when several survival layers use the same shifts.
+# Fit the registration once. The shift range is the scientifically plausible
+# range of origin-time offsets in the application.
 registration <- fit_silk_registration(
-  train_data$subjects, train_data$visits,
+  train_subjects, train_visits,
   shift_range = c(-12, 12), seed = 1
 )
+
+# Inspect cross-fitted training shifts and profile diagnostics before fitting
+# the survival layer.
+head(registration$train_stage)
+
 fit <- fit_silk(
-  train_data$subjects, train_data$visits,
+  train_subjects, train_visits,
   registration = registration
 )
 
-# Predict absolute risk at horizons 1, 2, 3, 4
-predictions <- predict_silk(fit, test_data$subjects, test_data$visits)
+# Predict absolute risk at the requested horizons.
+predictions <- predict_silk(
+  fit, test_subjects, test_visits,
+  horizons = c(1, 2, 3, 4)
+)
 head(predictions)
 
-# Evaluate predictions (Brier score, AUC, calibration)
+# If outcome columns are available in the test subject table, evaluate Brier
+# score, AUC, and calibration using the common prediction-frame interface.
 metrics <- evaluate_prediction_frame(predictions)
 metrics$summary
 ```
 
-## Comparators and Diagnostics
+## Registration diagnostics
 
-The simulation roster contains exactly 14 methods. Four benchmarks deliberately
-exclude longitudinal biomarkers: `Recorded-Cox`, `Recorded-Beran`,
-`Oracle-Cox`, and `Oracle-Beran`. Their exported interfaces are
-`fit_recorded_cox()`, `fit_recorded_beran()`, `fit_oracle_cox()`, and
-`fit_oracle_beran()`; the recorded methods use recorded age only, while the
-oracle methods use latent true age only.
+`fit_silk_registration()` returns cross-fitted training shifts and the final
+template used for new subjects. Review boundary indicators and the profile gaps
+`gap_q1` and `gap_q2`; small gaps indicate that materially different shifts
+have nearly the same registration loss and should not be treated as strongly
+identified estimates.
 
-The ten biomarker-using methods are `SILK-Gaussian`, `SILK-Laplace`,
-`SILK-Matern32`, `MMLM-Correct`, `MMLM-Misspecified`, `JM-Correct`,
-`JM-Misspecified`, `RSF`, `DeepSurv`, and `TimeError-Integrated-Landmark`.
-The correct parametric models use `X1`, `X2`, `X3`, `X4`, and centered `X3^2`;
-their misspecified partners deliberately omit `X3`, `X4`, and `X3^2` from both
-the longitudinal and event submodels. The three SILK entries differ only in
-their registration kernel.
-
-Registration fits carry profile-gap diagnostics (`gap`, `gap_q1`, and
-`gap_q2`) so weakly identified shift profiles can be flagged instead of treated
-as routine successes. The MACS analysis scripts use fixed prospective
-landmarks at 1, 2, 3, and 5 years after seroconversion and write
-`macs_profile_diagnostics.csv` plus a summarized
-`macs_profile_gap_summary.csv`.
-
-## Simulation Scenarios
-
-SILK ships with 12 simulation scenarios for `generate_dataset_fixed()`.
-They are for simulation studies only. When fitting a real dataset, use
-`shift_range` or `shift_grid`; the package does not assume that the
-real data follow any named simulation error scenario.
-
-| Scenario | Description |
-|---|---|
-| `no_error` | No origin error (calibration baseline) |
-| `mean_moderate` | Mean-stage biomarkers, moderate error |
-| `mean_severe` | Mean-stage biomarkers, severe error |
-| `mean_strong_dense` | Strong mean signal, dense visits, severe error |
-| `dist_moderate` | Distributional biomarkers, moderate error |
-| `dist_large` | Distributional biomarkers, severe error |
-| `dist_strong_dense` | Strong distributional signal, dense visits |
-| `weak_stage` | Weak biomarker signal (negative control) |
-| `biased_shift` | Biased origin shift (anchor misspecification) |
-| `heavy_tail` | Heavy-tailed origin error |
-| `asymmetric_shift` | Asymmetric origin error |
-| `irregular_missing` | Irregular visits with missing data |
+For a new dataset, `predict_silk_registration()` returns the estimated shift,
+the biomarker-clock initializer, the grid minimum, boundary status, and profile
+gaps without fitting or predicting the survival outcome.
 
 ## Visualization
 
@@ -124,12 +109,12 @@ silk_opt("SHIFT_GRID_STEP")
 # Change registration grid resolution
 silk_options(SHIFT_GRID_STEP = 0.1, N_FOLDS = 10)
 
-# The biomarker kernel is always the exact Gaussian RBF kernel. Its bandwidth
-# may use the median-distance rule or a fixed positive value.
+# Select an exact characteristic biomarker kernel and its bandwidth rule.
+silk_options(BIOMARKER_KERNEL = "gaussian")
 silk_options(BIOMARKER_BANDWIDTH = "median")
 
-# These settings change only the scalar template-input kernel and numerical
-# ridge fit; they never approximate the characteristic biomarker kernel.
+# These settings control the conditional template-input feature map and its
+# numerical ridge fit; they do not approximate the biomarker kernel itself.
 silk_options(TEMPLATE_INPUT_FEATURES = 32,
              TEMPLATE_RIDGE_LAMBDA = 0.001,
              N_CORES = 4)

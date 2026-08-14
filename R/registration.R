@@ -650,9 +650,17 @@ build_position_template <- function(visits_df, subjects, shift, ids,
     positions = registration_data$positions,
     biomarker_builder = registration_data$biomarker_builder,
     input_builder = registration_data$input_builder,
+    clock_model = registration_data$clock_model,
     biomarker_kernel = registration_data$biomarker_builder$kernel,
     characteristic = TRUE,
-    clock_signal_r2 = if (clock_sst > 0) 1 - clock_sse / clock_sst else NA_real_,
+    clock_signal_r2 = if (!is.null(registration_data$clock_model)) {
+      registration_data$clock_model$cv_r2
+    } else if (clock_sst > 0) {
+      1 - clock_sse / clock_sst
+    } else NA_real_,
+    clock_n_neighbors = if (!is.null(registration_data$clock_model)) {
+      registration_data$clock_model$n_neighbors
+    } else NA_integer_,
     longitudinal_signal = registration_data$longitudinal_signal,
     template_ridge = lambda,
     number_positions = number_positions
@@ -852,31 +860,222 @@ kernel_neighbour_prediction <- function(kernel, response, exclude_self = FALSE) 
 }
 
 #' @keywords internal
+clock_covariate_matrix <- function(visits_df, requested = NULL) {
+  if (is.null(requested)) {
+    requested <- as.character(silk_opt("CLOCK_RESIDUALIZE_COVARIATES"))
+  }
+  requested <- unique(requested[nzchar(requested)])
+  columns <- list(`(Intercept)` = rep(1, nrow(visits_df)))
+  used <- character(0)
+  for (name in requested) {
+    value <- if (identical(name, "X3_sq") && "X3" %in% names(visits_df)) {
+      as.numeric(visits_df$X3)^2 - 1
+    } else if (name %in% names(visits_df)) {
+      as.numeric(visits_df[[name]])
+    } else {
+      NULL
+    }
+    if (is.null(value)) next
+    value[!is.finite(value)] <- 0
+    columns[[name]] <- value
+    used <- c(used, name)
+  }
+  list(
+    matrix = do.call(cbind, columns),
+    covariates = used
+  )
+}
+
+#' @keywords internal
+fit_clock_residualizer <- function(visits_df, biomarker_columns) {
+  design <- clock_covariate_matrix(visits_df)
+  response <- as.matrix(visits_df[, biomarker_columns, drop = FALSE])
+  storage.mode(response) <- "double"
+  ridge <- suppressWarnings(as.numeric(silk_opt("CLOCK_RESIDUAL_RIDGE"))[1L])
+  if (!is.finite(ridge) || ridge < 0) ridge <- 1e-6
+  penalty <- diag(ncol(design$matrix))
+  penalty[1L, 1L] <- 0
+  factor <- safe_chol(
+    crossprod(design$matrix) + ridge * penalty,
+    base_jitter = silk_opt("TEMPLATE_NUMERICAL_JITTER")
+  )
+  coefficient <- chol_solve(factor$R, crossprod(design$matrix, response))
+  list(
+    covariates = design$covariates,
+    coefficient = coefficient,
+    biomarker_columns = biomarker_columns,
+    ridge = ridge
+  )
+}
+
+#' @keywords internal
+apply_clock_residualizer <- function(visits_df, residualizer) {
+  design <- clock_covariate_matrix(visits_df, residualizer$covariates)$matrix
+  response <- as.matrix(
+    visits_df[, residualizer$biomarker_columns, drop = FALSE]
+  )
+  storage.mode(response) <- "double"
+  response - design %*% residualizer$coefficient
+}
+
+#' @keywords internal
+clock_path_matrix <- function(visits_df, builder) {
+  ids <- sort(unique(visits_df$id))
+  number_biomarkers <- length(builder$biomarker_columns)
+  number_positions <- length(builder$positions)
+  residual <- apply_clock_residualizer(visits_df, builder$residualizer)
+  residual <- apply_scaler(residual, builder$residual_scaler)
+  values <- matrix(0, nrow = length(ids), ncol = number_positions * number_biomarkers)
+  observed <- matrix(0, nrow = length(ids), ncol = number_positions)
+
+  for (position_index in seq_along(builder$positions)) {
+    position <- builder$positions[position_index]
+    index <- which(visits_df$visit == position)
+    if (!length(index)) next
+    row_id <- match(visits_df$id[index], ids)
+    block <- ((position_index - 1L) * number_biomarkers + 1L):
+      (position_index * number_biomarkers)
+    # A nominal position is unique per subject in the supported data layout.
+    # rowsum also makes the construction deterministic if duplicate rows occur.
+    aggregated <- rowsum(residual[index, , drop = FALSE], row_id, reorder = FALSE)
+    rows <- as.integer(rownames(aggregated))
+    count <- tabulate(row_id, nbins = length(ids))[rows]
+    values[rows, block] <- aggregated / pmax(count, 1L)
+    observed[rows, position_index] <- 1
+  }
+
+  missing_weight <- suppressWarnings(
+    as.numeric(silk_opt("CLOCK_PATH_MISSING_WEIGHT"))[1L]
+  )
+  if (!is.finite(missing_weight) || missing_weight < 0) missing_weight <- 0.5
+  features <- if (missing_weight > 0) {
+    cbind(values, missing_weight * observed)
+  } else {
+    values
+  }
+  list(ids = ids, features = features)
+}
+
+#' @keywords internal
+clock_neighbour_candidates <- function(number_subjects, exclude_self = TRUE) {
+  available <- number_subjects - as.integer(isTRUE(exclude_self))
+  if (available < 1L) return(1L)
+  fractions <- suppressWarnings(
+    as.numeric(silk_opt("CLOCK_NEIGHBOR_FRACTIONS"))
+  )
+  fractions <- fractions[is.finite(fractions) & fractions > 0 & fractions <= 1]
+  if (!length(fractions)) fractions <- c(0.05, 0.10, 0.20, 0.40, 0.80)
+  minimum <- suppressWarnings(as.integer(silk_opt("CLOCK_MIN_NEIGHBORS"))[1L])
+  if (!is.finite(minimum) || minimum < 1L) minimum <- 8L
+  unique(pmin(available, pmax(minimum, round(fractions * number_subjects))))
+}
+
+#' @keywords internal
+kernel_neighbour_prediction_fixed <- function(kernel, response, n_neighbors,
+                                               exclude_self = FALSE) {
+  kernel <- as.matrix(kernel)
+  response <- as.numeric(response)
+  if (ncol(kernel) != length(response)) {
+    stop("Kernel columns and clock responses have different lengths.", call. = FALSE)
+  }
+  if (isTRUE(exclude_self) && nrow(kernel) == ncol(kernel)) diag(kernel) <- -Inf
+  available <- ncol(kernel) - as.integer(isTRUE(exclude_self) && nrow(kernel) == ncol(kernel))
+  n_neighbors <- min(available, max(1L, as.integer(n_neighbors)[1L]))
+  vapply(seq_len(nrow(kernel)), function(row) {
+    index <- order(kernel[row, ], decreasing = TRUE)[seq_len(n_neighbors)]
+    weight <- pmax(kernel[row, index], 0)
+    if (!any(is.finite(weight)) || sum(weight, na.rm = TRUE) <= 1e-12) {
+      return(mean(response))
+    }
+    sum(weight * response[index]) / sum(weight)
+  }, numeric(1))
+}
+
+#' @keywords internal
+select_clock_neighbour_count <- function(kernel, response) {
+  candidates <- clock_neighbour_candidates(ncol(kernel), exclude_self = TRUE)
+  error <- vapply(candidates, function(number) {
+    prediction <- kernel_neighbour_prediction_fixed(
+      kernel, response, number, exclude_self = TRUE
+    )
+    sum((as.numeric(response) - prediction)^2)
+  }, numeric(1))
+  tolerance <- suppressWarnings(as.numeric(silk_opt("CLOCK_CV_TOLERANCE"))[1L])
+  if (!is.finite(tolerance) || tolerance < 0) tolerance <- 0.005
+  eligible <- candidates[error <= min(error) * (1 + tolerance)]
+  # The recorded landmark is a noisy response when the origin error is large.
+  # Its leave-one-out risk can consequently be nearly flat over k. Preferring
+  # the largest eligible neighbourhood in that case collapses the predicted
+  # stage toward the marginal mean. Use the least-smoothed near-minimizer; the
+  # tolerance still prevents an immaterial numerical difference from deciding
+  # between candidates.
+  as.integer(min(eligible))
+}
+
+#' @keywords internal
+fit_clock_path_model <- function(visits_df, subjects, biomarker_kernel = NULL) {
+  biomarker_columns <- bio_columns(visits_df)
+  residualizer <- fit_clock_residualizer(visits_df, biomarker_columns)
+  residual <- apply_clock_residualizer(visits_df, residualizer)
+  builder <- list(
+    positions = sort(unique(visits_df$visit)),
+    biomarker_columns = biomarker_columns,
+    residualizer = residualizer,
+    residual_scaler = make_scaler(residual)
+  )
+  path <- clock_path_matrix(visits_df, builder)
+  kernel_name <- normalize_biomarker_kernel(biomarker_kernel)
+  bandwidth <- median_distance_bandwidth(path$features)
+  kernel_builder <- list(kernel = kernel_name, bandwidth = bandwidth)
+  kernel <- evaluate_biomarker_kernel(path$features, builder = kernel_builder)
+  response <- subjects$A_obs[match(path$ids, subjects$id)]
+  number <- select_clock_neighbour_count(kernel, response)
+  training_stage <- kernel_neighbour_prediction_fixed(
+    kernel, response, number, exclude_self = TRUE
+  )
+  total <- sum((response - mean(response))^2)
+  cv_r2 <- if (is.finite(total) && total > 0) {
+    1 - sum((response - training_stage)^2) / total
+  } else NA_real_
+  c(builder, list(
+    train_ids = path$ids,
+    train_features = path$features,
+    response = response,
+    training_stage = training_stage,
+    kernel = kernel_name,
+    bandwidth = bandwidth,
+    n_neighbors = number,
+    cv_r2 = cv_r2
+  ))
+}
+
+#' @keywords internal
+predict_clock_path_stage <- function(model, visits_df) {
+  path <- clock_path_matrix(visits_df, model)
+  kernel <- evaluate_biomarker_kernel(
+    path$features, model$train_features,
+    builder = list(kernel = model$kernel, bandwidth = model$bandwidth)
+  )
+  prediction <- kernel_neighbour_prediction_fixed(
+    kernel, model$response, model$n_neighbors, exclude_self = FALSE
+  )
+  stats::setNames(prediction, path$ids)
+}
+
+#' @keywords internal
 biomarker_clock_initial_shift <- function(visits_df, subjects, ids,
                                           registration_data, grid) {
   subject_landmark <- subjects$A_obs[match(ids, subjects$id)]
-  stage_sum <- numeric(length(ids))
-  stage_count <- integer(length(ids))
-  clock_sse <- 0
-  clock_sst <- 0
-  for (position in registration_data$positions) {
-    cached <- registration_data$by_position[[as.character(position)]]
-    index <- cached$row_index
-    if (length(index) < 3L) next
-    position_visits <- visits_df[index, , drop = FALSE]
-    row_subject <- match(position_visits$id, ids)
-    response <- subject_landmark[row_subject]
-    predicted_landmark <- kernel_neighbour_prediction(
-      cached$K_B, response, exclude_self = TRUE
-    )
-    clock_sse <- clock_sse + sum((response - predicted_landmark)^2)
-    clock_sst <- clock_sst + sum((response - mean(response))^2)
-    stage_sum[row_subject] <- stage_sum[row_subject] + predicted_landmark
-    stage_count[row_subject] <- stage_count[row_subject] + 1L
+  clock_model <- registration_data$clock_model
+  if (!is.null(clock_model)) {
+    stage <- clock_model$training_stage[
+      match(ids, clock_model$train_ids)
+    ]
+    signal_r2 <- clock_model$cv_r2
+  } else {
+    stage <- rep(mean(subject_landmark), length(ids))
+    signal_r2 <- NA_real_
   }
-  fallback <- mean(subject_landmark)
-  stage <- ifelse(stage_count > 0L, stage_sum / pmax(stage_count, 1L), fallback)
-  signal_r2 <- if (clock_sst > 0) 1 - clock_sse / clock_sst else NA_real_
   longitudinal_signal <- registration_data$longitudinal_signal
   if (clock_gate_disables(longitudinal_signal)) {
     stage <- subject_landmark
@@ -895,6 +1094,9 @@ fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
   number_ids <- length(ids)
   anchor <- anchor_basis(subjects, ids)
   registration_data <- prepare_registration_data(visits_df, biomarker_kernel)
+  registration_data$clock_model <- fit_clock_path_model(
+    visits_df, subjects, biomarker_kernel
+  )
   number_starts <- suppressWarnings(as.integer(silk_opt("N_STARTS"))[1L])
   if (!is.finite(number_starts) || number_starts < 1L) number_starts <- 1L
   random_start_sd <- as.numeric(silk_opt("RANDOM_START_SD"))[1L]
@@ -1010,6 +1212,16 @@ template_clock_initial_shift <- function(template, visits_df) {
   ids <- sort(unique(visits_df$id))
   if (clock_gate_disables(template$longitudinal_signal)) {
     return(stats::setNames(rep(0, length(ids)), ids))
+  }
+  if (!is.null(template$clock_model)) {
+    stage <- predict_clock_path_stage(template$clock_model, visits_df)
+    observed_landmark <- vapply(ids, function(id) {
+      index <- which(visits_df$id == id)
+      mean(visits_df$A_obs_il[index] + visits_df$lag[index])
+    }, numeric(1))
+    shift <- observed_landmark - as.numeric(stage[as.character(ids)])
+    shift[!is.finite(shift)] <- 0
+    return(stats::setNames(shift, ids))
   }
   standardized <- apply_biomarker_builder(visits_df, template$biomarker_builder)
   stage_sum <- numeric(length(ids))

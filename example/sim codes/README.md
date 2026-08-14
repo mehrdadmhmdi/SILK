@@ -24,8 +24,86 @@ simulation. The manuscript is not read or modified by these scripts.
   stopping, and no Python data-loader workers.
 
 The simulation writes registration diagnostics for both cross-fitted training
-subjects and held-out test subjects. Inspect shift/stage recovery before
-interpreting prediction gains.
+subjects and held-out test subjects. Inspect stage RMSE and stage R-squared—not
+shift correlation alone—before interpreting prediction gains. When origin
+error is much more variable than latent age, even a nearly constant stage
+estimate can produce a deceptively high correlation between estimated and true
+shifts.
+
+### Variables used by SILK
+
+- The exact characteristic biomarker kernel uses all generated biomarker
+  channels, `B1`--`B4`, jointly. No biomarker channel is dropped.
+- Its biology-clock initializer uses one kernel on the complete longitudinal
+  history (four biomarkers at every available nominal visit position), after a
+  training-only ridge residualization on `X1`, `X2`, `X3`, `X4`, and centered
+  `X3^2`. The neighbourhood size is selected without survival outcomes by
+  leave-one-out prediction of recorded landmark age.
+- The conditional RKHS template takes candidate latent age, `X1`--`X4`, and
+  visit lag as inputs. Its Gaussian input kernel can represent nonlinear
+  functions of `X3`; the explicit centered `X3^2` term is additionally used in
+  the clock residualization and survival layer.
+- The SILK survival layer uses calibrated attained age together with `X1`,
+  `X2`, `X3`, `X4`, and centered `X3^2`. Thus SILK is not assigned a
+  misspecified event model in this design.
+
+The profile optimization is a local half-year refinement of the full-history
+clock. This is a fixed estimator choice in the locked configuration, not an
+outcome-dependent selection performed by an array task.
+
+## Reproduce one simulation analysis in R
+
+The package README is intentionally limited to package installation and the
+analysis workflow for prepared data. Simulation-only data generation, scenario
+definitions, comparator rosters, and cluster instructions are documented here.
+
+```r
+library(SILK)
+
+train <- generate_dataset_fixed(
+  n = 400, scenario_name = "mean_moderate", schedule_name = "m4", seed = 1
+)
+test <- generate_dataset_fixed(
+  n = 1000, scenario_name = "mean_moderate", schedule_name = "m4", seed = 2
+)
+
+grid <- make_shift_grid("mean_moderate")
+registration <- fit_silk_registration(
+  train$subjects, train$visits,
+  shift_grid = grid, seed = 1, biomarker_kernel = "gaussian"
+)
+fit <- fit_silk(
+  train$subjects, train$visits,
+  registration = registration,
+  method = "SILK-Gaussian"
+)
+pred <- predict_silk(
+  fit, test$subjects, test$visits,
+  horizons = c(1, 2, 3, 4)
+)
+evaluate_prediction_frame(pred)$summary
+```
+
+### Simulation scenarios
+
+| Scenario | Description |
+|---|---|
+| `no_error` | No origin error (calibration baseline) |
+| `mean_moderate` | Mean-stage biomarkers, moderate error |
+| `mean_severe` | Mean-stage biomarkers, severe error |
+| `mean_strong_dense` | Strong mean signal, dense visits, severe error |
+| `dist_moderate` | Distributional biomarkers, moderate error |
+| `dist_large` | Distributional biomarkers, severe error |
+| `dist_strong_dense` | Strong distributional signal, dense visits |
+| `weak_stage` | Stage-null biomarker negative control |
+| `biased_shift` | Biased origin shift (anchor misspecification) |
+| `heavy_tail` | Heavy-tailed origin error |
+| `asymmetric_shift` | Asymmetric origin error |
+| `irregular_missing` | Irregular visits with missing data |
+
+The named scenarios are data-generating mechanisms only. A real-data SILK fit
+uses a scientifically plausible `shift_range` or explicit `shift_grid`; it does
+not assume one of these scenario names.
 
 ## Cluster run
 
@@ -59,7 +137,7 @@ confirmatory outcomes.
 
 ### Small n=400, R=2, four-visit test
 
-To test the complete 12-method roster across all 12 error scenarios using only
+To test the complete 14-method roster across all 12 error scenarios using only
 the four-visit (`m4`) design, submit:
 
 ```bash
@@ -127,6 +205,14 @@ Cox, SILK mean-regression, or extra Beran variant remains in the active design.
 `MMLM-Correct` and `JM-Correct` include `X1`, `X2`, `X3`, `X4`, and centered
 `X3^2` in both of their parametric submodels. Their misspecified partners are
 identical except that both submodels retain only `X1` and `X2`.
+
+The current comparator implementations use `B1` as their longitudinal/current
+biomarker: MMLM and JM fit the `B1` trajectory, and RSF, DeepSurv, and
+TimeError-Integrated-Landmark receive current `B1`. SILK alone currently uses
+the joint `B1`--`B4` history. This distinction must remain explicit in reports;
+calling these comparators four-biomarker methods would be inaccurate. A future
+multivariate-comparator arm should be added as a separate prespecified design,
+not silently substituted after inspecting outcomes.
 
 ### Required validation before the confirmatory rerun
 

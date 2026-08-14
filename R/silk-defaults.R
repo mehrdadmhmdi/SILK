@@ -163,10 +163,31 @@ silk_default_options <- function() {
     # The global profile minimum is therefore NOT the good estimator here; the
     # localization supplies identification the criterion alone does not.
     # Set to Inf only to reproduce that sensitivity arm.
-    PROFILE_SEARCH_RADIUS = 2.0,
-    # Gate on the longitudinal-signal diagnostic. The diagnostic returns NA when
-    # the visit design makes it undefined; NA never disables the clock.
-    CLOCK_SIGNAL_MIN = 0.10,
+    # The full-history clock is already a cross-validated biology-stage
+    # estimate. The RKHS profile is therefore a local refinement, not a second
+    # unrestricted stage estimator. A half-year trust region prevented flat
+    # severe-error profiles from destroying the clock estimate in the
+    # development audit while retaining a genuine loss-based update.
+    PROFILE_SEARCH_RADIUS = 0.5,
+    # The clock initializer uses one characteristic kernel on the complete
+    # covariate-adjusted biomarker history. Its neighbourhood size is selected
+    # without survival outcomes by leave-one-out prediction of the noisy
+    # recorded landmark age. Fractions are relative to the available training
+    # subjects and are capped below n so self-exclusion remains well defined.
+    CLOCK_NEIGHBOR_FRACTIONS = c(0.05, 0.10, 0.20, 0.40, 0.80),
+    CLOCK_MIN_NEIGHBORS = 8L,
+    # Prefer the smallest neighbourhood whose cross-validated squared error is
+    # within one half percent of the minimum. With a noisy recorded landmark,
+    # the risk surface can be nearly flat; choosing the largest near-minimizer
+    # then collapses the biology-stage estimate toward the marginal mean.
+    CLOCK_CV_TOLERANCE = 0.005,
+    CLOCK_RESIDUAL_RIDGE = 1e-6,
+    CLOCK_RESIDUALIZE_COVARIATES = c("X1", "X2", "X3", "X4", "X3_sq"),
+    CLOCK_PATH_MISSING_WEIGHT = 0.5,
+    # Gate on the longitudinal-signal diagnostic. The former 0.10 threshold
+    # disabled the moderate distributional scenario (signal about 0.096) while
+    # the stage-null control was near 0.01. NA remains non-disabling.
+    CLOCK_SIGNAL_MIN = 0.05,
 
     # Parallelism for the cross-fitted registration folds. Default "auto" uses
     # every available core: it honours SILK_N_CORES, then the cluster

@@ -4,7 +4,7 @@
 # separate development design that is not used for confirmatory claims. Neither
 # cluster entry point performs outcome-based tuning.
 
-export SILK_CONFIG_ID="silk-confirmatory-2026-08-14-v4"
+export SILK_CONFIG_ID="silk-confirmatory-2026-08-14-v5"
 export SILK_HYPERPARAMETER_SELECTION="separate-development-design"
 
 export SILK_N_TRAIN_GRID="200,400,1000"
@@ -30,8 +30,14 @@ export SILK_BIOMARKER_KERNELS="gaussian,laplace,matern32"
 export SILK_BIOMARKER_BW="median"
 export SILK_BIOMARKER_BW_SCALE="1"
 export SILK_SHIFT_GRID_STEP="0.2"
-export SILK_PROFILE_SEARCH_RADIUS="2.0"
+export SILK_PROFILE_SEARCH_RADIUS="0.5"
 export SILK_ALT_LOCAL_RADIUS="2.0"
+export SILK_CLOCK_SIGNAL_MIN="0.05"
+export SILK_CLOCK_NEIGHBOR_FRACTIONS="0.05,0.10,0.20,0.40,0.80"
+export SILK_CLOCK_MIN_NEIGHBORS="8"
+export SILK_CLOCK_CV_TOLERANCE="0.005"
+export SILK_CLOCK_RESIDUAL_RIDGE="1e-6"
+export SILK_CLOCK_PATH_MISSING_WEIGHT="0.5"
 export SILK_N_STARTS="3"
 export SILK_N_FOLDS="5"
 export SILK_ENABLE_JMBAYES2="true"

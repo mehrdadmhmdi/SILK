@@ -1,6 +1,6 @@
 # =============================================================================
 # cfg.R
-# Multifaceted SILK simulation configuration, v4.
+# Multifaceted SILK simulation configuration, v5.
 #
 # Simulation target:
 #   The primary target is absolute risk over fixed prediction horizons:
@@ -183,11 +183,10 @@ TEMPLATE_QUERY_CHUNK <- as.integer(
 )
 N_ALT_ITER_MAX <- as.integer(Sys.getenv("SILK_ALT_ITER", unset = "7"))
 ALT_TOL <- 1e-3
-# Localized profile search. Measured on a pilot (mean_severe, n = 200, m4):
-# removing the localization degraded held-out shift RMSE from 2.13 to 8.62 and
-# the correlation with the true shift from 0.92 to 0.11, so the restriction is
-# part of the estimator and must be disclosed in the manuscript rather than
-# removed. Set SILK_PROFILE_SEARCH_RADIUS=Inf for the sensitivity arm.
+# Localized profile search. The full-history, covariate-adjusted kernel clock is
+# the initializer; the RKHS profile is restricted to a half-year refinement so
+# flat severe-error profiles cannot erase the clock's stage information. Set
+# SILK_PROFILE_SEARCH_RADIUS=Inf only for the registered sensitivity arm.
 ALT_LOCAL_RADIUS <- as.numeric(Sys.getenv("SILK_ALT_LOCAL_RADIUS", unset = "2.0"))
 N_STARTS <- as.integer(Sys.getenv("SILK_N_STARTS", unset = "3"))
 RANDOM_START_SD <- 0.75
@@ -195,8 +194,32 @@ N_FOLDS <- as.integer(Sys.getenv("SILK_N_FOLDS", unset = "5"))
 ANCHOR_MODE <- Sys.getenv("SILK_ANCHOR_MODE", unset = "rx") # "intercept" or "rx"
 PROFILE_TEMPERATURE <- as.numeric(Sys.getenv("SILK_PROFILE_TEMP", unset = "0.015"))
 PROFILE_LOCAL_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_LOCAL_RADIUS", unset = "0.8"))
-PROFILE_SEARCH_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_SEARCH_RADIUS", unset = "2.0"))
-CLOCK_SIGNAL_MIN <- as.numeric(Sys.getenv("SILK_CLOCK_SIGNAL_MIN", unset = "0.10"))
+PROFILE_SEARCH_RADIUS <- as.numeric(Sys.getenv("SILK_PROFILE_SEARCH_RADIUS", unset = "0.5"))
+CLOCK_SIGNAL_MIN <- as.numeric(Sys.getenv("SILK_CLOCK_SIGNAL_MIN", unset = "0.05"))
+CLOCK_NEIGHBOR_FRACTIONS <- as.numeric(strsplit(
+  Sys.getenv("SILK_CLOCK_NEIGHBOR_FRACTIONS", unset = "0.05,0.10,0.20,0.40,0.80"), ","
+)[[1]])
+CLOCK_NEIGHBOR_FRACTIONS <- CLOCK_NEIGHBOR_FRACTIONS[
+  is.finite(CLOCK_NEIGHBOR_FRACTIONS) & CLOCK_NEIGHBOR_FRACTIONS > 0 &
+    CLOCK_NEIGHBOR_FRACTIONS <= 1
+]
+if (!length(CLOCK_NEIGHBOR_FRACTIONS)) {
+  stop("SILK_CLOCK_NEIGHBOR_FRACTIONS must contain values in (0, 1].", call. = FALSE)
+}
+CLOCK_MIN_NEIGHBORS <- as.integer(Sys.getenv("SILK_CLOCK_MIN_NEIGHBORS", unset = "8"))
+CLOCK_CV_TOLERANCE <- as.numeric(Sys.getenv("SILK_CLOCK_CV_TOLERANCE", unset = "0.005"))
+CLOCK_RESIDUAL_RIDGE <- as.numeric(Sys.getenv("SILK_CLOCK_RESIDUAL_RIDGE", unset = "1e-6"))
+CLOCK_PATH_MISSING_WEIGHT <- as.numeric(
+  Sys.getenv("SILK_CLOCK_PATH_MISSING_WEIGHT", unset = "0.5")
+)
+if (!is.finite(PROFILE_SEARCH_RADIUS) || PROFILE_SEARCH_RADIUS <= 0 ||
+    !is.finite(CLOCK_SIGNAL_MIN) ||
+    !is.finite(CLOCK_MIN_NEIGHBORS) || CLOCK_MIN_NEIGHBORS < 1L ||
+    !is.finite(CLOCK_CV_TOLERANCE) || CLOCK_CV_TOLERANCE < 0 ||
+    !is.finite(CLOCK_RESIDUAL_RIDGE) || CLOCK_RESIDUAL_RIDGE < 0 ||
+    !is.finite(CLOCK_PATH_MISSING_WEIGHT) || CLOCK_PATH_MISSING_WEIGHT < 0) {
+  stop("The SILK full-history clock settings are invalid.", call. = FALSE)
+}
 
 # ----------------------------- Methods ---------------------------------------
 # The roster has exactly fourteen methods.
@@ -477,6 +500,11 @@ silk_options(
   PROFILE_LOCAL_RADIUS = PROFILE_LOCAL_RADIUS,
   PROFILE_SEARCH_RADIUS = PROFILE_SEARCH_RADIUS,
   CLOCK_SIGNAL_MIN = CLOCK_SIGNAL_MIN,
+  CLOCK_NEIGHBOR_FRACTIONS = CLOCK_NEIGHBOR_FRACTIONS,
+  CLOCK_MIN_NEIGHBORS = CLOCK_MIN_NEIGHBORS,
+  CLOCK_CV_TOLERANCE = CLOCK_CV_TOLERANCE,
+  CLOCK_RESIDUAL_RIDGE = CLOCK_RESIDUAL_RIDGE,
+  CLOCK_PATH_MISSING_WEIGHT = CLOCK_PATH_MISSING_WEIGHT,
   N_CORES = registration_cores,
   METHODS = METHODS,
   METHOD_ORDER = METHOD_ORDER,

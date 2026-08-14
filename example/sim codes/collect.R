@@ -117,7 +117,7 @@ if (nrow(registration_diagnostics)) {
   )
   diagnostic_metrics <- intersect(
     c(
-      "clock_signal_r2", "longitudinal_kernel_signal", "shift_correlation",
+      "clock_signal_r2", "clock_n_neighbors", "longitudinal_kernel_signal", "shift_correlation",
       "shift_spearman", "shift_rmse", "shift_mae",
       "shift_bias", "shift_slope", "shift_sd_ratio", "stage_rmse",
       "recorded_stage_rmse", "stage_rmse_improvement", "stage_r2",
