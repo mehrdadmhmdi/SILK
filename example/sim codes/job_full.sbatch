@@ -32,20 +32,33 @@ fi
 source "$LOCKED_CONFIG_FILE"
 
 # The validation and confirmatory jobs differ only in replication count and
-# output directory. All scientific and computational hyperparameters come from
-# the same versioned file above and cannot be changed by the submission shell.
+# output directory. The smoke stage is an explicitly isolated test design:
+# n=400, R=2, primary phase only, with the four-visit schedule for every
+# scenario. All method hyperparameters still come from the locked file above.
 SILK_RUN_STAGE="${SILK_RUN_STAGE:-validation}"
 case "$SILK_RUN_STAGE" in
   validation)
     export SILK_N_REP=1
+    export SILK_DESIGN_PHASES="primary,timepoint_extension"
+    unset SILK_FORCE_SCHEDULE
     export SILK_OUT_DIR="${SILK_VALIDATION_OUT_DIR:-$SIM_DIR/outputs-validation-nrep1}"
     ;;
   confirmatory)
     export SILK_N_REP=50
+    export SILK_DESIGN_PHASES="primary,timepoint_extension"
+    unset SILK_FORCE_SCHEDULE
     export SILK_OUT_DIR="${SILK_CONFIRMATORY_OUT_DIR:-$SIM_DIR/outputs-confirmatory-50rep}"
     ;;
+  smoke_n400_r2_m4)
+    export SILK_N_REP=2
+    export SILK_N_TRAIN_GRID="400"
+    export SILK_TP_N_TRAIN="400"
+    export SILK_DESIGN_PHASES="primary"
+    export SILK_FORCE_SCHEDULE="m4"
+    export SILK_OUT_DIR="${SILK_TEST_OUT_DIR:-$SIM_DIR/outputs-test-n400-r2-m4}"
+    ;;
   *)
-    echo "SILK_RUN_STAGE must be validation or confirmatory." >&2
+    echo "SILK_RUN_STAGE must be validation, confirmatory, or smoke_n400_r2_m4." >&2
     exit 1
     ;;
 esac
@@ -88,6 +101,8 @@ echo "  tuning source:       $SILK_HYPERPARAMETER_SELECTION"
 echo "  package ref:         $SILK_PACKAGE_REF"
 echo "  output directory:    $SILK_OUT_DIR"
 echo "  replicates:          $SILK_N_REP"
+echo "  design phases:       ${SILK_DESIGN_PHASES:-primary,timepoint_extension}"
+echo "  forced schedule:     ${SILK_FORCE_SCHEDULE:-none}"
 echo "  kernels:             $SILK_BIOMARKER_KERNELS"
 echo "  JMbayes2:            $SILK_ENABLE_JMBAYES2"
 echo "  paper feature map:   $SILK_PAPER_FEATURE_MAP  (primary roster)"
@@ -98,7 +113,7 @@ echo "  bandwidth scale:     $SILK_BIOMARKER_BW_SCALE"
 echo "  feature map:         $SILK_FEATURE_MAP"
 
 mkdir -p "$SILK_OUT_DIR/logs" "$SILK_OUT_DIR/summary"
-if [[ "$SILK_RUN_STAGE" == "validation" ]]; then
+if [[ "$SILK_RUN_STAGE" != "confirmatory" ]]; then
   rm -f "$SILK_OUT_DIR/summary/collection_report_complete.ok"
 fi
 
@@ -110,6 +125,8 @@ run_stage=$SILK_RUN_STAGE
 n_rep=$SILK_N_REP
 n_train_grid=$SILK_N_TRAIN_GRID
 n_test=$SILK_N_TEST
+design_phases=${SILK_DESIGN_PHASES:-primary,timepoint_extension}
+forced_schedule=${SILK_FORCE_SCHEDULE:-none}
 kernels=$SILK_BIOMARKER_KERNELS
 biomarker_bandwidth=$SILK_BIOMARKER_BW
 biomarker_bandwidth_scale=$SILK_BIOMARKER_BW_SCALE
@@ -216,6 +233,6 @@ if [[ "$SILK_RUN_STAGE" == "confirmatory" ]]; then
     "$SIM_DIR/job_fig.sbatch")"
   echo "Figure job: $figure_job"
 else
-  echo "Validation stage: figures are not submitted."
+  echo "$SILK_RUN_STAGE stage: figures are not submitted."
 fi
 echo "Output directory: $SILK_OUT_DIR"

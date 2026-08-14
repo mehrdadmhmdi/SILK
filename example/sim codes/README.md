@@ -57,6 +57,21 @@ All hyperparameters are fixed in that file from a separate development design
 not included in the confirmatory claims; neither launcher tunes against the
 confirmatory outcomes.
 
+### Small n=400, R=2, four-visit test
+
+To test the complete 12-method roster across all 12 error scenarios using only
+the four-visit (`m4`) design, submit:
+
+```bash
+sbatch job_test_n400_r2_m4.sbatch
+```
+
+This creates 24 simulation tasks (12 scenarios times 2 replications), all with
+`n_train=400` and `n_visits=4`. It writes to
+`outputs-test-n400-r2-m4/`, keeps the standard prediction horizons 1--4, runs
+the collection and two-question report after the arrays finish, and does not
+submit manuscript figures.
+
 The first controller run creates a persistent CPU environment under
 `.cluster-env-r44/`, installs the R dependencies and CPU-only `pycox` stack,
 and installs the requested SILK GitHub commit. Later runs reuse that environment

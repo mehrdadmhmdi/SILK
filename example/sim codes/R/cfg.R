@@ -44,6 +44,24 @@ VISIT_SCHEDULES <- list(
 )
 
 PRIMARY_SCHEDULE <- "m4"
+FORCED_SCHEDULE <- trimws(Sys.getenv("SILK_FORCE_SCHEDULE", unset = ""))
+if (nzchar(FORCED_SCHEDULE) && !FORCED_SCHEDULE %in% names(VISIT_SCHEDULES)) {
+  stop(
+    "SILK_FORCE_SCHEDULE must be one of: ",
+    paste(names(VISIT_SCHEDULES), collapse = ", "),
+    call. = FALSE
+  )
+}
+DESIGN_PHASES <- unique(trimws(strsplit(
+  Sys.getenv("SILK_DESIGN_PHASES", unset = "primary,timepoint_extension"), ","
+)[[1]]))
+allowed_design_phases <- c("primary", "timepoint_extension")
+if (!length(DESIGN_PHASES) || length(setdiff(DESIGN_PHASES, allowed_design_phases))) {
+  stop(
+    "SILK_DESIGN_PHASES must be a comma-separated subset of primary,timepoint_extension.",
+    call. = FALSE
+  )
+}
 TIMEPOINT_SCENARIOS <- SCENARIOS_ALL <- c(
   "no_error",
   "mean_moderate",
@@ -429,27 +447,32 @@ silk_options(
 
 # ----------------------------- Task plan -------------------------------------
 build_design_cells <- function() {
-  primary <- do.call(rbind, lapply(SCENARIOS$scenario, function(scn) {
-    data.frame(
-      phase = "primary",
-      scenario = scn,
-      n_train = N_TRAIN_GRID,
-      schedule = scenario_schedule(scn),
-      stringsAsFactors = FALSE
-    )
-  }))
+  designs <- list()
+  if ("primary" %in% DESIGN_PHASES) {
+    designs$primary <- do.call(rbind, lapply(SCENARIOS$scenario, function(scn) {
+      data.frame(
+        phase = "primary",
+        scenario = scn,
+        n_train = N_TRAIN_GRID,
+        schedule = if (nzchar(FORCED_SCHEDULE)) FORCED_SCHEDULE else scenario_schedule(scn),
+        stringsAsFactors = FALSE
+      )
+    }))
+  }
 
-  timepoint <- do.call(rbind, lapply(SCENARIOS$scenario, function(scn) {
-    data.frame(
-      phase = "timepoint_extension",
-      scenario = scn,
-      n_train = TIMEPOINT_N_TRAIN,
-      schedule = TIMEPOINT_SCHEDULES,
-      stringsAsFactors = FALSE
-    )
-  }))
+  if ("timepoint_extension" %in% DESIGN_PHASES) {
+    designs$timepoint <- do.call(rbind, lapply(SCENARIOS$scenario, function(scn) {
+      data.frame(
+        phase = "timepoint_extension",
+        scenario = scn,
+        n_train = TIMEPOINT_N_TRAIN,
+        schedule = TIMEPOINT_SCHEDULES,
+        stringsAsFactors = FALSE
+      )
+    }))
+  }
 
-  design <- rbind(primary, timepoint)
+  design <- do.call(rbind, designs)
   design$cell_id <- seq_len(nrow(design))
   design$n_test <- N_TEST
   design$n_rep <- N_REP
