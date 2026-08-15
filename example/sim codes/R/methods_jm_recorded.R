@@ -111,6 +111,15 @@ fit_jm_longitudinal_model <- function(visits,
     # event model and the marker association is strongly shrunk toward zero.
     fit <- fit_one(~ A_obs_centered | id)
     random_structure <- "misspecified Gaussian random intercept and recorded-time slope"
+    if (is.null(fit)) {
+      # Retain both Gaussian random effects but remove their estimated
+      # correlation as a last-resort numerical fallback.
+      fit <- fit_one(list(id = nlme::pdDiag(~ A_obs_centered)))
+      random_structure <- paste(
+        "misspecified independent Gaussian random intercept and",
+        "recorded-time slope fallback"
+      )
+    }
   }
   if (is.null(fit)) {
     stop("JM could not fit either longitudinal mixed model.", call. = FALSE)
