@@ -103,9 +103,17 @@ testthat::test_that("misspecified JM has supported random slopes and prior shape
 
   testthat::expect_s3_class(fit$fit, "lme")
   testthat::expect_match(fit$random_structure, "Gaussian random intercept")
+  testthat::expect_s3_class(fit$fit$modelStruct$reStruct[[1]], "pdDiag")
   testthat::expect_identical(fit$marker_transform, "first_difference")
   testthat::expect_true(is.finite(fit$random_time_center))
   testthat::expect_true("A_obs_centered" %in% names(nlme::getData(fit$fit)))
+  random_sd <- sqrt(diag(as.matrix(nlme::getVarCov(
+    fit$fit, type = "random.effects"
+  ))))
+  testthat::expect_gte(
+    min(random_sd),
+    fit$random_effect_sd_floor_ratio * fit$fit$sigma - 1e-10
+  )
   testthat::expect_equal(
     mean(nlme::getData(fit$fit)$A_obs_centered), 0,
     tolerance = 1e-12

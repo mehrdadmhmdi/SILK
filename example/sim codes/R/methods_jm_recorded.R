@@ -9,6 +9,37 @@
 # References: Rizopoulos (2012, 2017); JMbayes2 package; nlme and survival.
 # =============================================================================
 
+JMBAYES_MISSPECIFIED_RE_SD_FLOOR_RATIO <- 0.05
+
+regularize_jm_random_effect_initialization <- function(
+    fit,
+    sd_floor_ratio = JMBAYES_MISSPECIFIED_RE_SD_FLOOR_RATIO) {
+  if (!inherits(fit, "lme") || !is.finite(sd_floor_ratio) || sd_floor_ratio <= 0) {
+    stop("JM random-effects regularization received invalid inputs.", call. = FALSE)
+  }
+  re_struct <- fit$modelStruct$reStruct
+  if (length(re_struct) != 1L || !inherits(re_struct[[1L]], "pdDiag")) {
+    stop("JM random-effects regularization requires one pdDiag structure.", call. = FALSE)
+  }
+
+  pd <- re_struct[[1L]]
+  log_relative_sd <- stats::coef(pd, unconstrained = TRUE)
+  floored <- pmax(log_relative_sd, log(sd_floor_ratio))
+  if (any(floored != log_relative_sd)) {
+    # pdDiag coefficients are log(SD_random / SD_residual). Rebuilding the
+    # structure at a 5% residual-SD floor gives JMbayes2 a positive-definite
+    # working covariance when nlme estimates a variance on the boundary. The
+    # joint model still estimates its random-effects covariance in the MCMC.
+    re_struct[[1L]] <- nlme::pdDiag(
+      value = floored,
+      form = stats::formula(pd),
+      nam = attr(pd, "Dimnames")[[1L]]
+    )
+    fit$modelStruct$reStruct <- re_struct
+  }
+  fit
+}
+
 prepare_jm_followup_clock <- function(subjects, visits,
                                       landmark_time = JMBAYES_LANDMARK_TIME) {
   subject_index <- match(visits$id, subjects$id)
@@ -109,17 +140,17 @@ fit_jm_longitudinal_model <- function(visits,
     # deliberately wrong here because a first-differenced B1 trajectory is
     # treated as Gaussian, while X3/X4/quadratic effects are omitted from the
     # event model and the marker association is strongly shrunk toward zero.
-    fit <- fit_one(~ A_obs_centered | id)
-    random_structure <- "misspecified Gaussian random intercept and recorded-time slope"
-    if (is.null(fit)) {
-      # Retain both Gaussian random effects but remove their estimated
-      # correlation as a last-resort numerical fallback.
-      fit <- fit_one(list(id = nlme::pdDiag(~ A_obs_centered)))
-      random_structure <- paste(
-        "misspecified independent Gaussian random intercept and",
-        "recorded-time slope fallback"
-      )
+    # Independence is part of the deliberately incorrect random-effects
+    # distribution. It also prevents JMbayes2 from receiving an ill-conditioned
+    # estimated intercept/slope correlation matrix.
+    fit <- fit_one(list(id = nlme::pdDiag(~ A_obs_centered)))
+    if (!is.null(fit)) {
+      fit <- regularize_jm_random_effect_initialization(fit)
     }
+    random_structure <- paste(
+      "misspecified independent Gaussian random intercept and",
+      "recorded-time slope with boundary-covariance regularization"
+    )
   }
   if (is.null(fit)) {
     stop("JM could not fit either longitudinal mixed model.", call. = FALSE)
@@ -131,7 +162,12 @@ fit_jm_longitudinal_model <- function(visits,
     specification = specification,
     fixed_covariates = fixed_covariates,
     marker_transform = if (specification == "correct") "raw" else "first_difference",
-    random_time_center = random_time_center
+    random_time_center = random_time_center,
+    random_effect_sd_floor_ratio = if (specification == "misspecified") {
+      JMBAYES_MISSPECIFIED_RE_SD_FLOOR_RATIO
+    } else {
+      NA_real_
+    }
   )
 }
 

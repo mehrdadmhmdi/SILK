@@ -59,8 +59,8 @@ fi
 export SILK_PACKAGE_REF="$validation_commit"
 
 if [[ ! -s "$validation_marker" ]]; then
-  echo "Validation raw tasks are present but reporting is incomplete."
-  echo "Rebuilding collection and the two-question report without rerunning tasks."
+  echo "Validation completion marker is absent."
+  echo "Checking whether the existing raw tasks have the current method roster before rebuilding reports."
   export SILK_RUN_STAGE="validation"
   export SILK_N_REP=1
   export REPORT_N_REP=1

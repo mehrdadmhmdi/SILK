@@ -30,13 +30,49 @@ failed_files <- list_raw("^prediction_failed_task_[0-9]+\\.csv$")
 # Audit (missing-task detection) uses the MAIN dir only: a cell is "present"
 # when its full-roster run exists in RAW_DIR; add-on dirs only add methods.
 main_metric_files <- list.files(RAW_DIR, pattern = "^prediction_metrics_task_[0-9]+\\.csv$", full.names = TRUE)
+main_status_files <- list.files(RAW_DIR, pattern = "^prediction_status_task_[0-9]+\\.csv$", full.names = TRUE)
 
 if (length(metric_files) == 0L) {
   stop("No prediction_metrics_task_*.csv files found in ", RAW_DIR, call. = FALSE)
 }
 
 plan <- build_task_plan()
-success_tasks <- sort(unique(task_id_from_path(main_metric_files)))
+metric_task_ids <- sort(unique(task_id_from_path(main_metric_files)))
+
+# A task file is current only when its status rows contain the exact
+# prespecified method roster once each. Merely finding 96 metric filenames is
+# insufficient because a reused output directory may contain a previous
+# simulation version's method labels.
+roster_rows <- lapply(main_status_files, function(path) {
+  task_id <- task_id_from_path(path)
+  status <- tryCatch(
+    read.csv(path, stringsAsFactors = FALSE),
+    error = function(e) data.frame()
+  )
+  methods <- if ("method" %in% names(status)) as.character(status$method) else character(0)
+  missing_methods <- setdiff(METHOD_ORDER, unique(methods))
+  extra_methods <- setdiff(unique(methods), METHOD_ORDER)
+  duplicate_methods <- unique(methods[duplicated(methods)])
+  valid <- length(methods) == length(METHOD_ORDER) &&
+    !length(missing_methods) && !length(extra_methods) && !length(duplicate_methods)
+  data.frame(
+    task_id = task_id,
+    valid_roster = valid,
+    missing_methods = paste(missing_methods, collapse = ";"),
+    extra_methods = paste(extra_methods, collapse = ";"),
+    duplicate_methods = paste(duplicate_methods, collapse = ";"),
+    status_file = basename(path),
+    stringsAsFactors = FALSE
+  )
+})
+roster_audit <- if (length(roster_rows)) do.call(rbind, roster_rows) else data.frame(
+  task_id = integer(0), valid_roster = logical(0), missing_methods = character(0),
+  extra_methods = character(0), duplicate_methods = character(0),
+  status_file = character(0), stringsAsFactors = FALSE
+)
+valid_status_tasks <- roster_audit$task_id[roster_audit$valid_roster]
+roster_mismatches <- roster_audit[!roster_audit$valid_roster, , drop = FALSE]
+success_tasks <- sort(intersect(metric_task_ids, valid_status_tasks))
 missing <- setdiff(plan$task_id, success_tasks)
 failed <- if (length(failed_files)) do.call(rbind, lapply(failed_files, read.csv, stringsAsFactors = FALSE)) else data.frame()
 
@@ -44,17 +80,37 @@ audit <- data.frame(
   expected_tasks = nrow(plan),
   successful_tasks = length(success_tasks),
   missing_tasks = length(missing),
+  roster_mismatch_tasks = nrow(roster_mismatches),
   failed_rows = nrow(failed),
-  complete = length(missing) == 0L && nrow(failed) == 0L,
+  complete = length(missing) == 0L && !nrow(roster_mismatches) && nrow(failed) == 0L,
   stringsAsFactors = FALSE
 )
 write.csv(audit, file.path(SUMMARY_DIR, "prediction_replication_audit.csv"), row.names = FALSE)
 if (length(missing) > 0L) write.csv(plan[plan$task_id %in% missing, ], file.path(SUMMARY_DIR, "prediction_missing_tasks.csv"), row.names = FALSE)
+if (nrow(roster_mismatches) > 0L) {
+  write.csv(
+    roster_mismatches,
+    file.path(SUMMARY_DIR, "prediction_roster_mismatch_tasks.csv"),
+    row.names = FALSE
+  )
+}
 if (nrow(failed) > 0L) write.csv(failed, file.path(SUMMARY_DIR, "prediction_failed_rows.csv"), row.names = FALSE)
 
 allow_incomplete <- identical(tolower(Sys.getenv("SILK_ALLOW_INCOMPLETE", unset = "false")), "true")
 if (!audit$complete && !allow_incomplete) {
-  stop("Collection incomplete. Set SILK_ALLOW_INCOMPLETE=true for provisional summaries.", call. = FALSE)
+  detail <- if (nrow(roster_mismatches)) {
+    paste0(
+      " ", nrow(roster_mismatches),
+      " task status files use a stale or invalid method roster; rerun the simulation tasks."
+    )
+  } else {
+    ""
+  }
+  stop(
+    "Collection incomplete.", detail,
+    " Set SILK_ALLOW_INCOMPLETE=true for provisional summaries.",
+    call. = FALSE
+  )
 }
 
 per_horizon <- do.call(rbind, lapply(per_horizon_files, read.csv, stringsAsFactors = FALSE))

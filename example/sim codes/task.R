@@ -18,6 +18,17 @@ status_file <- file.path(RAW_DIR, sprintf("prediction_status_task_%04d.csv", cel
 registration_file <- file.path(RAW_DIR, sprintf("registration_diagnostics_task_%04d.csv", cell$task_id))
 error_file <- file.path(RAW_DIR, sprintf("prediction_failed_task_%04d.csv", cell$task_id))
 
+# A validation rerun may intentionally reuse an output directory. Remove only
+# this task's prior artifacts before computing so a failed or interrupted rerun
+# cannot leave an older roster's successful CSVs in place.
+unlink(
+  c(
+    pred_file, metric_file, per_horizon_file, paired_file, calibration_file,
+    status_file, registration_file, error_file
+  ),
+  force = TRUE
+)
+
 res <- tryCatch(
   run_simulation_comparisons(cell),
   error = function(e) {
