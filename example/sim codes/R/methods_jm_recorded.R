@@ -49,7 +49,7 @@ fit_jm_longitudinal_model <- function(visits,
   }
   biomarker <- first_biomarker_col(visits)
   dat <- visits
-  dat$marker_value <- as.numeric(dat[[biomarker]])
+  dat$marker_value <- marker_values_for_specification(dat, biomarker, specification)
   fixed_covariates <- if (specification == "correct") {
     c("X1", "X2", "X3", "X4", "X3_sq")
   } else {
@@ -87,11 +87,21 @@ fit_jm_longitudinal_model <- function(visits,
     )
   }
 
-  fit <- fit_one(~ A_obs_il | id)
-  random_structure <- "random intercept and recorded-time slope"
-  if (is.null(fit)) {
-    fit <- fit_one(~ 1 | id)
-    random_structure <- "random intercept fallback"
+  if (specification == "correct") {
+    fit <- fit_one(~ A_obs_il | id)
+    random_structure <- "random intercept and recorded-time slope"
+    if (is.null(fit)) {
+      fit <- fit_one(~ 1 | id)
+      random_structure <- "random intercept fallback"
+    }
+  } else {
+    # JMbayes2 does not support a single longitudinal outcome with only random
+    # intercepts.  The supported Gaussian intercept-slope working model remains
+    # deliberately wrong here because a first-differenced B1 trajectory is
+    # treated as Gaussian, while X3/X4/quadratic effects are omitted from the
+    # event model and the marker association is strongly shrunk toward zero.
+    fit <- fit_one(~ A_obs_il | id)
+    random_structure <- "misspecified Gaussian random intercept and recorded-time slope"
   }
   if (is.null(fit)) {
     stop("JM could not fit either longitudinal mixed model.", call. = FALSE)
@@ -101,7 +111,17 @@ fit_jm_longitudinal_model <- function(visits,
     biomarker = biomarker,
     random_structure = random_structure,
     specification = specification,
-    fixed_covariates = fixed_covariates
+    fixed_covariates = fixed_covariates,
+    marker_transform = if (specification == "correct") "raw" else "first_difference"
+  )
+}
+
+jm_association_priors <- function(specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
+  if (specification == "correct") return(NULL)
+  list(
+    mean_alphas = list(0),
+    Tau_alphas = list(matrix(MISSPECIFIED_ASSOCIATION_SHRINKAGE, 1L, 1L))
   )
 }
 
@@ -137,13 +157,15 @@ fit_jm_recorded <- function(train_subjects, train_visits,
     survival::Surv(Y_obs, status) ~ X1 + X2
   }
   cox_fit <- survival::coxph(event_formula, data = event_dat, x = TRUE)
+  association_priors <- jm_association_priors(specification)
   jm_fit <- JMbayes2::jm(
     cox_fit,
     marker_model$fit,
     time_var = "A_obs_il",
     n_chains = JMBAYES_N_CHAINS,
     n_iter = JMBAYES_N_ITER,
-    n_burnin = JMBAYES_N_BURNIN
+    n_burnin = JMBAYES_N_BURNIN,
+    priors = association_priors
   )
 
   list(
@@ -228,7 +250,9 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
     if (!nrow(sv)) {
       stop("JM has no longitudinal history for test subject ", subject_id, ".", call. = FALSE)
     }
-    sv$marker_value <- as.numeric(sv[[b]])
+    sv$marker_value <- marker_values_for_specification(
+      sv, b, fit$specification
+    )
     sv$A_obs_il <- as.numeric(sv$A_obs_il) - as.numeric(test_subjects$A_obs[i]) + landmark_time
     sv$X1 <- test_subjects$X1[i]
     sv$X2 <- test_subjects$X2[i]

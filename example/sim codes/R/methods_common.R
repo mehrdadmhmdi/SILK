@@ -15,6 +15,44 @@ first_biomarker_col <- function(visits) {
   bio_columns(visits)[1]
 }
 
+# The deliberately misspecified parametric comparators model first differences
+# of B1. Differencing exactly removes the subject-constant X3, X4, and centered-
+# X3-squared offsets that otherwise make B1 a surrogate for the omitted survival
+# risk score, while retaining a weak longitudinal-change signal.
+first_difference_marker <- function(visits, biomarker) {
+  if (!biomarker %in% names(visits)) {
+    stop("Missing biomarker column: ", biomarker, call. = FALSE)
+  }
+  if (!"id" %in% names(visits)) {
+    stop("visits must contain id for within-subject demeaning.", call. = FALSE)
+  }
+  value <- as.numeric(visits[[biomarker]])
+  out <- rep(NA_real_, length(value))
+  for (subject_id in unique(visits$id)) {
+    index <- which(visits$id == subject_id)
+    index <- index[order(visits$A_obs_il[index])]
+    finite <- index[is.finite(value[index]) & is.finite(visits$A_obs_il[index])]
+    if (length(finite) >= 2L) {
+      out[finite[-1L]] <- diff(value[finite])
+    }
+  }
+  out
+}
+
+marker_values_for_specification <- function(visits, biomarker,
+                                            specification = c("correct", "misspecified")) {
+  specification <- match.arg(specification)
+  if (specification == "correct") {
+    return(as.numeric(visits[[biomarker]]))
+  }
+  first_difference_marker(visits, biomarker)
+}
+
+# Fixed, prespecified shrinkage for the B1 association in both misspecified
+# parametric comparators. It is a ridge penalty in MMLM and a normal-prior
+# precision in JM; it is never selected separately by scenario or replicate.
+MISSPECIFIED_ASSOCIATION_SHRINKAGE <- 50
+
 method_context <- function(method, fold_id = 1L, replicate_id = 1L,
                            n_train_setting = NA, time_grid_setting = NA) {
   list(
@@ -372,7 +410,7 @@ fit_current_value_mixed_model <- function(subjects, visits,
   specification <- match.arg(specification)
   b <- first_biomarker_col(visits)
   dat <- visits
-  dat$marker_value <- dat[[b]]
+  dat$marker_value <- marker_values_for_specification(dat, b, specification)
   if (specification == "correct") {
     missing <- setdiff(c("X1", "X2", "X3", "X4"), names(dat))
     if (length(missing)) {
@@ -381,18 +419,33 @@ fit_current_value_mixed_model <- function(subjects, visits,
     dat$X3_sq <- dat$X3^2 - 1
   }
   dat$id <- factor(dat$id)
+  if (specification == "misspecified") {
+    subject_landmark <- stats::setNames(as.numeric(subjects$A_obs), subjects$id)
+    dat$model_time <- as.numeric(dat$A_obs_il) -
+      as.numeric(subject_landmark[as.character(dat$id)])
+  }
   fixed_formula <- if (specification == "correct") {
     marker_value ~ A_obs_il + X1 + X2 + X3 + X4 + X3_sq
   } else {
-    marker_value ~ A_obs_il + X1 + X2
+    marker_value ~ model_time + X1 + X2
   }
   fit <- NULL
   if (requireNamespace("nlme", quietly = TRUE)) {
+    # Both working models need a random slope for stable dynamic prediction.
+    # After X3, X4, and X3-squared are omitted, the remaining subject effects in
+    # the misspecified arm are non-Gaussian mixtures induced by those omitted
+    # covariates, so this Gaussian intercept-slope distribution is deliberately
+    # incorrect even though it is computationally supported.
+    random_formula <- if (specification == "correct") {
+      ~ A_obs_il | id
+    } else {
+      ~ model_time | id
+    }
     fit <- tryCatch(
       suppressWarnings(
         nlme::lme(
           fixed_formula,
-          random = ~ A_obs_il | id,
+          random = random_formula,
           data = dat,
           control = nlme::lmeControl(maxIter = 100, msMaxIter = 100, niterEM = 50, returnObject = TRUE)
         )
@@ -408,7 +461,11 @@ fit_current_value_mixed_model <- function(subjects, visits,
     if (!is.null(fixed_effects)) names(fixed_effects) <- names(nlme::fixef(fit))
     random_cov <- tryCatch(as.matrix(nlme::getVarCov(fit, type = "random.effects")), error = function(e) NULL)
     if (!is.null(random_cov) && (is.null(colnames(random_cov)) || any(!nzchar(colnames(random_cov))))) {
-      rn <- c("(Intercept)", "A_obs_il")[seq_len(ncol(random_cov))]
+      rn <- if (specification == "correct") {
+        c("(Intercept)", "A_obs_il")[seq_len(ncol(random_cov))]
+      } else {
+        c("(Intercept)", "model_time")[seq_len(ncol(random_cov))]
+      }
       rownames(random_cov) <- rn
       colnames(random_cov) <- rn
     }
@@ -420,12 +477,25 @@ fit_current_value_mixed_model <- function(subjects, visits,
     biomarker = b,
     fixed_effects = fixed_effects,
     random_cov = random_cov,
-    residual_sd = residual_sd
+    residual_sd = residual_sd,
+    marker_transform = if (specification == "correct") "raw" else "first_difference",
+    random_effect_assumption = if (specification == "correct") {
+      "Gaussian random intercept and recorded-time slope"
+    } else {
+      "misspecified Gaussian random intercept and relative-time slope for first-differenced B1"
+    },
+    use_subject_random_effects = TRUE
   )
 }
 
 predict_current_value_mixed_model <- function(model, subjects, visits) {
-  locf <- current_marker_value(subjects, visits, "recorded")
+  prediction_visits <- visits
+  if (identical(model$specification, "misspecified")) {
+    prediction_visits[[model$biomarker]] <- marker_values_for_specification(
+      prediction_visits, model$biomarker, "misspecified"
+    )
+  }
+  locf <- current_marker_value(subjects, prediction_visits, "recorded")
   if (is.null(model$fit) || is.null(model$fixed_effects) || is.null(model$random_cov)) return(locf)
 
   beta <- model$fixed_effects
@@ -441,7 +511,7 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
   b <- model$biomarker
   pred <- locf
 
-  fixed_design <- function(a_obs, data) {
+  fixed_design <- function(a_obs, data, landmark = NULL) {
     n <- length(a_obs)
     value <- function(name) {
       if (name %in% names(data)) as.numeric(data[[name]]) else rep(0, n)
@@ -450,6 +520,7 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
     X <- cbind(
       "(Intercept)" = 1,
       A_obs_il = as.numeric(a_obs),
+      model_time = if (is.null(landmark)) as.numeric(a_obs) else as.numeric(a_obs) - landmark,
       X1 = value("X1"),
       X2 = value("X2"),
       X3 = x3,
@@ -459,23 +530,31 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
     X[, names(beta), drop = FALSE]
   }
 
-  random_design <- function(a_obs) {
+  random_design <- function(a_obs, landmark = NULL) {
     Z <- cbind(
       "(Intercept)" = 1,
-      A_obs_il = as.numeric(a_obs)
+      A_obs_il = as.numeric(a_obs),
+      model_time = if (is.null(landmark)) as.numeric(a_obs) else as.numeric(a_obs) - landmark
     )
     Z[, z_names, drop = FALSE]
   }
 
   for (i in seq_len(nrow(subjects))) {
-    sv <- visits[visits$id == subjects$id[i], , drop = FALSE]
+    sv <- prediction_visits[prediction_visits$id == subjects$id[i], , drop = FALSE]
     sv <- sv[sv$A_obs_il <= subjects$A_obs[i] + 1e-8, , drop = FALSE]
-    if (!nrow(sv)) sv <- visits[visits$id == subjects$id[i], , drop = FALSE]
+    if (!nrow(sv)) {
+      sv <- prediction_visits[prediction_visits$id == subjects$id[i], , drop = FALSE]
+    }
     if (!nrow(sv) || !b %in% names(sv)) next
 
     y <- as.numeric(sv[[b]])
-    X <- fixed_design(sv$A_obs_il, sv)
-    Z <- random_design(sv$A_obs_il)
+    subject_landmark <- if (identical(model$specification, "misspecified")) {
+      as.numeric(subjects$A_obs[i])
+    } else {
+      NULL
+    }
+    X <- fixed_design(sv$A_obs_il, sv, subject_landmark)
+    Z <- random_design(sv$A_obs_il, subject_landmark)
     keep <- is.finite(y) & apply(X, 1, function(row) all(is.finite(row))) &
       apply(Z, 1, function(row) all(is.finite(row)))
     if (!any(keep)) next
@@ -486,12 +565,18 @@ predict_current_value_mixed_model <- function(model, subjects, visits) {
     eta <- as.numeric(X %*% beta)
     resid <- y - eta
     V <- Z %*% D %*% t(Z) + diag(sigma2, nrow(Z))
-    bhat <- tryCatch(
-      as.numeric(D %*% t(Z) %*% solve(V, resid)),
-      error = function(e) rep(0, ncol(D))
+    bhat <- if (isTRUE(model$use_subject_random_effects)) {
+      tryCatch(
+        as.numeric(D %*% t(Z) %*% solve(V, resid)),
+        error = function(e) rep(0, ncol(D))
+      )
+    } else {
+      rep(0, ncol(D))
+    }
+    X0 <- fixed_design(
+      subjects$A_obs[i], subjects[i, , drop = FALSE], subject_landmark
     )
-    X0 <- fixed_design(subjects$A_obs[i], subjects[i, , drop = FALSE])
-    Z0 <- random_design(subjects$A_obs[i])
+    Z0 <- random_design(subjects$A_obs[i], subject_landmark)
     val <- as.numeric(X0 %*% beta + Z0 %*% bhat)
     if (is.finite(val)) pred[i] <- val
   }
