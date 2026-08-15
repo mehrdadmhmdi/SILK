@@ -62,6 +62,15 @@ fit_jm_longitudinal_model <- function(visits,
   if (!nrow(dat) || length(unique(dat$id)) < 2L) {
     stop("JM has insufficient complete longitudinal observations.", call. = FALSE)
   }
+  random_time_center <- NA_real_
+  if (specification == "misspecified") {
+    # Centering is an exact reparameterization of an unstructured Gaussian
+    # random intercept/slope model. It avoids near-singular mixed-model systems
+    # caused by using absolute follow-up-clock values (roughly 6--10) after the
+    # first observation is removed by differencing.
+    random_time_center <- mean(dat$A_obs_il)
+    dat$A_obs_centered <- dat$A_obs_il - random_time_center
+  }
 
   fixed_formula <- if (specification == "correct") {
     marker_value ~ A_obs_il + X1 + X2 + X3 + X4 + X3_sq
@@ -100,7 +109,7 @@ fit_jm_longitudinal_model <- function(visits,
     # deliberately wrong here because a first-differenced B1 trajectory is
     # treated as Gaussian, while X3/X4/quadratic effects are omitted from the
     # event model and the marker association is strongly shrunk toward zero.
-    fit <- fit_one(~ A_obs_il | id)
+    fit <- fit_one(~ A_obs_centered | id)
     random_structure <- "misspecified Gaussian random intercept and recorded-time slope"
   }
   if (is.null(fit)) {
@@ -112,7 +121,8 @@ fit_jm_longitudinal_model <- function(visits,
     random_structure = random_structure,
     specification = specification,
     fixed_covariates = fixed_covariates,
-    marker_transform = if (specification == "correct") "raw" else "first_difference"
+    marker_transform = if (specification == "correct") "raw" else "first_difference",
+    random_time_center = random_time_center
   )
 }
 
@@ -254,6 +264,9 @@ predict_jm_recorded <- function(fit, test_subjects, test_visits,
       sv, b, fit$specification
     )
     sv$A_obs_il <- as.numeric(sv$A_obs_il) - as.numeric(test_subjects$A_obs[i]) + landmark_time
+    if (identical(fit$specification, "misspecified")) {
+      sv$A_obs_centered <- sv$A_obs_il - fit$marker_model$random_time_center
+    }
     sv$X1 <- test_subjects$X1[i]
     sv$X2 <- test_subjects$X2[i]
     sv$X3 <- test_subjects$X3[i]
