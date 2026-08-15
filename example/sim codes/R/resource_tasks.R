@@ -18,7 +18,7 @@ RESOURCE_CLASSES <- data.frame(
   ),
   cpus = c(4L, 4L, 4L, 4L, 4L),
   memory = c("12g", "16g", "24g", "20g", "32g"),
-  walltime = c("08:00:00", "12:00:00", "18:00:00", "24:00:00", "36:00:00"),
+  walltime = rep("01:00:00", 5L),
   description = c(
     "Baseline cells with observed-age ML comparators.",
     "Large training size, dense visits, or JMbayes2-enabled baseline cells.",

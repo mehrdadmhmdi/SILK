@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/%x-%j.log
 
 set -euo pipefail
@@ -71,7 +71,7 @@ array_job="$(sbatch --parsable \
   --partition=cpu \
   --cpus-per-task=4 \
   --mem=16G \
-  --time=02:00:00 \
+  --time=01:00:00 \
   --array="1-${n_tasks}" \
   --output="$SILK_OUT_DIR/logs/%x-%A_%a.log" \
   --export="ALL,SILK_RESOURCE_CLASS=failed-comparators,SILK_TASK_LIST_FILE=${TASK_LIST}" \
