@@ -108,7 +108,7 @@ Rscript --vanilla -e '
     is.function(fit_silk_registration),
     is.function(predict_silk_registration),
     identical(silk_default_options()$BIOMARKER_KERNEL, "gaussian"),
-    !any(grepl("Linear", silk_default_options()$METHODS, fixed = TRUE))
+    all(grepl("^SILK-", silk_default_options()$METHODS))
   )
   stopifnot(
     reticulate::py_module_available("torch"),

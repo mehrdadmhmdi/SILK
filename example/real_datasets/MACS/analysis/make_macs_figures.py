@@ -62,8 +62,8 @@ UIUC_BLUE = "#13294B"
 
 # display label -> (color, linestyle, marker)
 STYLE = {
-    "SILK-Cox (Gaussian)":       (UIUC_BLUE,   "-",  "o"),
-    "Parametric MMLM-Cox":       (UIUC_ORANGE, "-.", "^"),
+    "SILK-Cox (Gaussian)":       (UIUC_ORANGE, "-",  "o"),
+    "Parametric MMLM-Cox":       (UIUC_BLUE,   "-.", "^"),
     "Recorded-clock Cox":        ("#7F7F7F",   (0, (1, 1)), "x"),
 }
 ORDER = list(STYLE.keys())

@@ -15,6 +15,7 @@ source_silk_prediction_modules <- function() {
   suppressPackageStartupMessages(library(SILK))
   source(file.path("R", "cfg.R"))
   source(file.path("R", "methods_common.R"))
+  source(file.path("R", "methods_survival_benchmarks.R"))
   source(file.path("R", "methods_mmlm_recorded.R"))
   source(file.path("R", "methods_jm_recorded.R"))
   source(file.path("R", "methods_observed_ml.R"))
@@ -91,15 +92,18 @@ fit_one_prediction_method <- function(method, train, cell, seed_base,
     ),
     "SILK-Gaussian" = fit_silk(
       train$subjects, train$visits,
-      method = "SILK-Gaussian", registration = require_shared_registration()
+      method = "SILK-Gaussian", registration = require_shared_registration(),
+      data_spec = SILK_DATA_SPEC
     ),
     "SILK-Laplace" = fit_silk(
       train$subjects, train$visits,
-      method = "SILK-Laplace", registration = require_shared_registration("laplace")
+      method = "SILK-Laplace", registration = require_shared_registration("laplace"),
+      data_spec = SILK_DATA_SPEC
     ),
     "SILK-Matern32" = fit_silk(
       train$subjects, train$visits,
-      method = "SILK-Matern32", registration = require_shared_registration("matern32")
+      method = "SILK-Matern32", registration = require_shared_registration("matern32"),
+      data_spec = SILK_DATA_SPEC
     ),
     "Oracle-Cox" = fit_oracle_cox(train$subjects),
     "Oracle-Beran" = fit_oracle_beran(train$subjects),
@@ -251,7 +255,8 @@ run_all_methods <- function(train, test, cell, seed_base) {
       train$subjects, train$visits,
       shift_grid = make_shift_grid(cell$scenario),
       seed = seed_base + 211L,
-      biomarker_kernel = kernel
+      biomarker_kernel = kernel,
+      data_spec = SILK_DATA_SPEC
     ))
     registration_seconds[[kernel]] <- proc.time()[3] - registration_start
     registration_warnings[[kernel]] <- registration_result$warnings

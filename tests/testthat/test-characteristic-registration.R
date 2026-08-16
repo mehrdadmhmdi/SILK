@@ -147,9 +147,12 @@ test_that("the clock kernel uses the complete covariate-adjusted biomarker histo
     CLOCK_NEIGHBOR_FRACTIONS = c(0.25, 0.50),
     CLOCK_MIN_NEIGHBORS = 2L,
     CLOCK_CV_TOLERANCE = 0,
-    CLOCK_PATH_MISSING_WEIGHT = 0.5
+    CLOCK_PATH_MISSING_WEIGHT = 0.5,
+    CLOCK_RESIDUALIZE_COVARIATES = c("X1", "X2", "X3", "X4", "X3_sq")
   )
   dat <- generate_dataset_fixed(24, "mean_moderate", schedule_name = "m4", seed = 19)
+  dat$subjects$X3_sq <- dat$subjects$X3^2 - 1
+  dat$visits$X3_sq <- dat$visits$X3^2 - 1
   model <- SILK:::fit_clock_path_model(dat$visits, dat$subjects, "gaussian")
 
   expect_identical(model$biomarker_columns, paste0("B", 1:4))

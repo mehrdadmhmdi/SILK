@@ -65,6 +65,16 @@ esac
 export SILK_RUN_STAGE
 export REPORT_N_REP="$SILK_N_REP"
 
+SILK_REQUIRE_VALIDATION="${SILK_REQUIRE_VALIDATION:-true}"
+case "${SILK_REQUIRE_VALIDATION,,}" in
+  true|false) ;;
+  *)
+    echo "SILK_REQUIRE_VALIDATION must be true or false." >&2
+    exit 1
+    ;;
+esac
+export SILK_REQUIRE_VALIDATION="${SILK_REQUIRE_VALIDATION,,}"
+
 if command -v sha256sum >/dev/null 2>&1; then
   SILK_CONFIG_SHA256="$(sha256sum "$LOCKED_CONFIG_FILE" | awk '{print $1}')"
 else
@@ -100,6 +110,7 @@ echo "  design phases:       ${SILK_DESIGN_PHASES:-primary,timepoint_extension}"
 echo "  forced schedule:     ${SILK_FORCE_SCHEDULE:-none}"
 echo "  kernels:             $SILK_BIOMARKER_KERNELS"
 echo "  JMbayes2:            $SILK_ENABLE_JMBAYES2"
+echo "  validation required: $SILK_REQUIRE_VALIDATION"
 echo "  profile search rad.: $SILK_PROFILE_SEARCH_RADIUS"
 echo "  alt local radius:    $SILK_ALT_LOCAL_RADIUS"
 echo "  registration starts: $SILK_N_STARTS"
@@ -147,9 +158,10 @@ alt_local_radius=$SILK_ALT_LOCAL_RADIUS
 n_starts=$SILK_N_STARTS
 n_folds=$SILK_N_FOLDS
 package_ref=$SILK_PACKAGE_REF
+validation_required=$SILK_REQUIRE_VALIDATION
 EOF
 
-if [[ "$SILK_RUN_STAGE" == "confirmatory" ]]; then
+if [[ "$SILK_RUN_STAGE" == "confirmatory" && "$SILK_REQUIRE_VALIDATION" == "true" ]]; then
   SILK_VALIDATION_DIR="${SILK_VALIDATION_DIR:-${SILK_VALIDATION_OUT_DIR:-$SIM_DIR/outputs-validation-nrep1}}"
   export SILK_VALIDATION_DIR
   validation_config="$SILK_VALIDATION_DIR/summary/locked_configuration.txt"
@@ -183,7 +195,7 @@ fi
 # receives it through --export=ALL and never installs software itself.
 source "$SIM_DIR/cluster_prepare_package.sh"
 
-if [[ "$SILK_RUN_STAGE" == "confirmatory" ]]; then
+if [[ "$SILK_RUN_STAGE" == "confirmatory" && "$SILK_REQUIRE_VALIDATION" == "true" ]]; then
   validation_commit="$(awk -F= '$1 == "commit" {print $2}' \
     "$SILK_VALIDATION_DIR/summary/silk_package_provenance.txt")"
   if [[ -z "$validation_commit" || "$validation_commit" != "$SILK_PACKAGE_COMMIT" ]]; then

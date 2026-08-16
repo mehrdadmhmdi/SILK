@@ -45,6 +45,17 @@ if (length(missing_primary)) {
 }
 visits <- visits[, c(non_biomarker_columns, MACS_PRIMARY_BIOMARKERS), drop = FALSE]
 
+# MACS is an application-level configuration. The SILK package itself does
+# not assume these covariates; this analysis declares them explicitly.
+MACS_SILK_DATA_SPEC <- silk_data_spec(
+  biomarker_cols = MACS_PRIMARY_BIOMARKERS,
+  covariate_cols = c("X1", "X2"),
+  template_input_covariates = c("X1", "X2", "lag"),
+  clock_covariates = c("X1", "X2"),
+  anchor_covariates = "X1",
+  anchor_mode = "rx"
+)
+
 cat("MACS PDS data loaded:\n")
 cat("  Subjects:", nrow(subjects), "\n")
 cat("  Visits:  ", nrow(visits), "\n")
@@ -183,29 +194,177 @@ macs_single_marker_visits <- function(visits, biomarker) {
   output
 }
 
+# Comparator implementation belongs to this application, not to the SILK
+# package.  MACS has two baseline covariates, so its working MMLM is explicit
+# about that application-level specification rather than silently requesting
+# the simulation model with X3/X4.
+macs_fit_current_value_mixed_model <- function(subjects, visits) {
+  dat <- visits
+  dat$marker_value <- dat$B1
+  dat$id <- factor(dat$id)
+  fit <- NULL
+  if (requireNamespace("nlme", quietly = TRUE)) {
+    fit <- tryCatch(
+      suppressWarnings(
+        nlme::lme(
+          marker_value ~ A_obs_il + X1 + X2,
+          random = ~ A_obs_il | id,
+          data = dat,
+          control = nlme::lmeControl(
+            maxIter = 100, msMaxIter = 100, niterEM = 50,
+            returnObject = TRUE
+          )
+        )
+      ),
+      error = function(e) NULL
+    )
+  }
+  fixed_effects <- random_cov <- NULL
+  residual_sd <- NA_real_
+  if (!is.null(fit)) {
+    fixed_effects <- as.numeric(nlme::fixef(fit))
+    names(fixed_effects) <- names(nlme::fixef(fit))
+    random_cov <- tryCatch(
+      as.matrix(nlme::getVarCov(fit, type = "random.effects")),
+      error = function(e) NULL
+    )
+    if (!is.null(random_cov) &&
+        (is.null(colnames(random_cov)) || any(!nzchar(colnames(random_cov))))) {
+      rn <- c("(Intercept)", "A_obs_il")[seq_len(ncol(random_cov))]
+      rownames(random_cov) <- rn
+      colnames(random_cov) <- rn
+    }
+    residual_sd <- tryCatch(as.numeric(fit$sigma), error = function(e) NA_real_)
+  }
+  list(fit = fit, biomarker = "B1", fixed_effects = fixed_effects,
+       random_cov = random_cov, residual_sd = residual_sd)
+}
+
+macs_predict_current_value_mixed_model <- function(model, subjects, visits) {
+  locf <- SILK:::current_marker_value(subjects, visits, "recorded")
+  if (is.null(model$fit) || is.null(model$fixed_effects) ||
+      is.null(model$random_cov)) return(locf)
+  beta <- model$fixed_effects
+  D <- model$random_cov
+  sigma2 <- model$residual_sd^2
+  if (!is.finite(sigma2) || sigma2 <= 0) sigma2 <- 1
+  if (is.null(colnames(D))) {
+    z_names <- c("(Intercept)", "A_obs_il")[seq_len(ncol(D))]
+    rownames(D) <- z_names
+    colnames(D) <- z_names
+  }
+  z_names <- colnames(D)
+  pred <- locf
+  fixed_design <- function(a_obs, data) {
+    value <- function(name) if (name %in% names(data)) {
+      as.numeric(data[[name]])
+    } else rep(0, length(a_obs))
+    X <- cbind(
+      "(Intercept)" = 1, A_obs_il = as.numeric(a_obs),
+      X1 = value("X1"), X2 = value("X2")
+    )
+    X[, names(beta), drop = FALSE]
+  }
+  random_design <- function(a_obs) {
+    Z <- cbind("(Intercept)" = 1, A_obs_il = as.numeric(a_obs))
+    Z[, z_names, drop = FALSE]
+  }
+  for (i in seq_len(nrow(subjects))) {
+    sv <- visits[visits$id == subjects$id[i], , drop = FALSE]
+    sv <- sv[sv$A_obs_il <= subjects$A_obs[i] + 1e-8, , drop = FALSE]
+    if (!nrow(sv)) sv <- visits[visits$id == subjects$id[i], , drop = FALSE]
+    if (!nrow(sv)) next
+    y <- as.numeric(sv$B1)
+    X <- fixed_design(sv$A_obs_il, sv)
+    Z <- random_design(sv$A_obs_il)
+    keep <- is.finite(y) & apply(X, 1, function(row) all(is.finite(row))) &
+      apply(Z, 1, function(row) all(is.finite(row)))
+    if (!any(keep)) next
+    y <- y[keep]; X <- X[keep, , drop = FALSE]; Z <- Z[keep, , drop = FALSE]
+    resid <- y - as.numeric(X %*% beta)
+    V <- Z %*% D %*% t(Z) + diag(sigma2, nrow(Z))
+    bhat <- tryCatch(as.numeric(D %*% t(Z) %*% solve(V, resid)),
+                     error = function(e) rep(0, ncol(D)))
+    value <- as.numeric(
+      fixed_design(subjects$A_obs[i], subjects[i, , drop = FALSE]) %*% beta +
+        random_design(subjects$A_obs[i]) %*% bhat
+    )
+    if (is.finite(value)) pred[i] <- value
+  }
+  pred[!is.finite(pred)] <- locf[!is.finite(pred)]
+  pred
+}
+
+macs_fit_residual_cox <- function(subjects, x) {
+  x <- as.matrix(x)
+  keep <- if (ncol(x)) apply(x, 2, stats::sd, na.rm = TRUE) > 1e-10 else logical(0)
+  x <- x[, keep, drop = FALSE]
+  km_fit <- survival::survfit(survival::Surv(subjects$U, subjects$delta) ~ 1)
+  km <- list(time = km_fit$time, surv = km_fit$surv)
+  if (!ncol(x)) return(list(type = "km", km = km, keep = keep))
+  center <- colMeans(x); scale <- apply(x, 2, stats::sd)
+  scale[!is.finite(scale) | scale < 1e-8] <- 1
+  x_std <- sweep(sweep(x, 2, center, "-"), 2, scale, "/")
+  dat <- data.frame(time = subjects$U, status = subjects$delta, x_std)
+  names(dat)[-(1:2)] <- paste0("x", seq_len(ncol(x_std)))
+  fit <- tryCatch(
+    survival::coxph(
+      stats::as.formula(paste("survival::Surv(time, status) ~",
+                              paste(names(dat)[-(1:2)], collapse = "+"))),
+      data = dat, ties = "breslow", x = FALSE
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(fit) || any(!is.finite(stats::coef(fit)))) {
+    return(list(type = "km", km = km, keep = keep))
+  }
+  list(type = "cox_residual", fit = fit,
+       basehaz = survival::basehaz(fit, centered = FALSE), keep = keep,
+       center = center, scale = scale, km = km)
+}
+
+macs_predict_residual_cox_risk <- function(model, x_new, horizons) {
+  x_new <- as.matrix(x_new)
+  if (length(model$keep)) x_new <- x_new[, model$keep, drop = FALSE]
+  if (identical(model$type, "km") || !ncol(x_new)) {
+    index <- findInterval(horizons, model$km$time)
+    surv <- vapply(index, function(ii) {
+      if (ii < 1L) 1 else model$km$surv[ii]
+    }, numeric(1))
+    return(matrix(rep(1 - surv, nrow(x_new)), nrow = nrow(x_new), byrow = TRUE))
+  }
+  x_new <- sweep(sweep(x_new, 2, model$center, "-"), 2, model$scale, "/")
+  x_new[!is.finite(x_new)] <- 0
+  H0 <- approx(model$basehaz$time, model$basehaz$hazard, horizons,
+               method = "constant", rule = 2, f = 0, yleft = 0,
+               yright = max(model$basehaz$hazard), ties = "ordered")$y
+  lp <- as.numeric(x_new %*% stats::coef(model$fit))
+  clip_probability(1 - exp(-outer(exp(lp), H0, "*")))
+}
+
 fit_multimarker_mmlm <- function(train_s, train_v) {
   models <- lapply(MACS_PRIMARY_BIOMARKERS, function(biomarker) {
     marker_visits <- macs_single_marker_visits(train_v, biomarker)
     list(
       biomarker = biomarker,
       visits_name = "B1",
-      model = SILK:::fit_current_value_mixed_model(train_s, marker_visits)
+      model = macs_fit_current_value_mixed_model(train_s, marker_visits)
     )
   })
   marker_matrix <- do.call(cbind, lapply(models, function(component) {
     marker_visits <- macs_single_marker_visits(train_v, component$biomarker)
-    SILK:::predict_current_value_mixed_model(component$model, train_s, marker_visits)
+    macs_predict_current_value_mixed_model(component$model, train_s, marker_visits)
   }))
   colnames(marker_matrix) <- paste0("mmlm_", MACS_PRIMARY_BIOMARKERS)
   x <- macs_survival_covariates(train_s, train_v, train_s$A_obs, marker_matrix)
   list(method = "MMLM-Recorded", marker_models = models,
-       fit = fit_residual_cox(train_s, x))
+       fit = macs_fit_residual_cox(train_s, x))
 }
 
 predict_multimarker_mmlm <- function(fit, test_s, test_v) {
   marker_matrix <- do.call(cbind, lapply(fit$marker_models, function(component) {
     marker_visits <- macs_single_marker_visits(test_v, component$biomarker)
-    SILK:::predict_current_value_mixed_model(component$model, test_s, marker_visits)
+    macs_predict_current_value_mixed_model(component$model, test_s, marker_visits)
   }))
   colnames(marker_matrix) <- paste0("mmlm_", MACS_PRIMARY_BIOMARKERS)
   macs_survival_covariates(test_s, test_v, test_s$A_obs, marker_matrix)
@@ -215,7 +374,7 @@ fit_macs_method <- function(method, train_s, train_v, fold_seed) {
   switch(method,
     "Cox-Recorded-SameFeature" = {
       x <- macs_survival_covariates(train_s, train_v, train_s$A_obs)
-      list(method = method, fit = fit_residual_cox(train_s, x))
+      list(method = method, fit = macs_fit_residual_cox(train_s, x))
     },
     "MMLM-Recorded" = fit_multimarker_mmlm(train_s, train_v),
     "SILK-Cox" = {
@@ -223,14 +382,15 @@ fit_macs_method <- function(method, train_s, train_v, fold_seed) {
         train_s, train_v,
         shift_range = MACS_SHIFT_RANGE,
         seed = fold_seed,
-        biomarker_kernel = "gaussian"
+        biomarker_kernel = "gaussian",
+        data_spec = MACS_SILK_DATA_SPEC
       )
       stage <- registration$train_stage$S_hat[
         match(train_s$id, registration$train_stage$id)
       ]
       x <- macs_survival_covariates(train_s, train_v, stage)
       list(method = method, registration = registration,
-           grid = registration$grid, fit = fit_residual_cox(train_s, x))
+           grid = registration$grid, fit = macs_fit_residual_cox(train_s, x))
     },
     stop("Unknown MACS method: ", method, call. = FALSE)
   )
@@ -257,7 +417,7 @@ predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
                                 n_train, landmark_set, landmark_time) {
   if (identical(method, "Cox-Recorded-SameFeature")) {
     x <- macs_survival_covariates(test_s, test_v, test_s$A_obs)
-    risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+    risk <- macs_predict_residual_cox_risk(fit$fit, x, HORIZONS)
     return(list(
       predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
                                           method, fold_id, n_train,
@@ -267,7 +427,7 @@ predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
   }
   if (identical(method, "MMLM-Recorded")) {
     x <- predict_multimarker_mmlm(fit, test_s, test_v)
-    risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+    risk <- macs_predict_residual_cox_risk(fit$fit, x, HORIZONS)
     return(list(
       predictions = real_prediction_frame(test_s, test_s$A_obs, HORIZONS, risk,
                                           method, fold_id, n_train,
@@ -281,7 +441,7 @@ predict_macs_method <- function(method, fit, test_s, test_v, fold_id,
   stage <- stage[match(test_s$id, ps$id)]
   ps$S_hat <- test_s$A_obs[match(ps$id, test_s$id)] - ps$e_hat
   x <- macs_survival_covariates(test_s, test_v, stage)
-  risk <- predict_residual_cox_risk(fit$fit, x, HORIZONS)
+  risk <- macs_predict_residual_cox_risk(fit$fit, x, HORIZONS)
   list(
     predictions = real_prediction_frame(test_s, stage, HORIZONS, risk,
                                         method, fold_id, n_train,

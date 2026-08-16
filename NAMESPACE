@@ -5,14 +5,8 @@ export(fit_silk)
 export(predict_silk)
 export(fit_silk_registration)
 export(predict_silk_registration)
-export(fit_recorded_cox)
-export(predict_recorded_cox)
-export(fit_recorded_beran)
-export(predict_recorded_beran)
-export(fit_oracle_cox)
-export(predict_oracle_cox)
-export(fit_oracle_beran)
-export(predict_oracle_beran)
+export(silk_data_spec)
+export(prepare_silk_inputs)
 
 # Data generation
 export(generate_dataset_fixed)
@@ -35,10 +29,6 @@ export(pretty_schedule)
 # Prediction helpers
 export(prediction_frame)
 export(clip_probability)
-export(fit_residual_cox)
-export(predict_residual_cox_risk)
-export(fit_beran_risk)
-export(predict_beran_risk)
 
 # Evaluation
 export(evaluate_prediction_frame)

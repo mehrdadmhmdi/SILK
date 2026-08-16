@@ -118,7 +118,9 @@ silk_default_options <- function() {
     # A fixed Fourier map defines the scalar template-input kernel only. It is
     # not an approximation to the biomarker kernel or its RKHS loss.
     TEMPLATE_INPUT_FEATURES = 16L,
-    TEMPLATE_INPUT_COVARIATES = c("X1", "X2", "X3", "X4", "lag"),
+    # The standalone package only assumes the recorded visit lag.  Applications
+    # and simulations add their own baseline or engineered inputs explicitly.
+    TEMPLATE_INPUT_COVARIATES = c("lag"),
     TEMPLATE_FEATURE_SEED = 271828L,
     TEMPLATE_RIDGE_LAMBDA = 0.001,
     TEMPLATE_NUMERICAL_JITTER = 1e-10,
@@ -182,7 +184,7 @@ silk_default_options <- function() {
     # then collapses the biology-stage estimate toward the marginal mean.
     CLOCK_CV_TOLERANCE = 0.005,
     CLOCK_RESIDUAL_RIDGE = 1e-6,
-    CLOCK_RESIDUALIZE_COVARIATES = c("X1", "X2", "X3", "X4", "X3_sq"),
+    CLOCK_RESIDUALIZE_COVARIATES = character(0),
     CLOCK_PATH_MISSING_WEIGHT = 0.5,
     # Gate on the longitudinal-signal diagnostic. The former 0.10 threshold
     # disabled the moderate distributional scenario (signal about 0.096) while
@@ -204,23 +206,16 @@ silk_default_options <- function() {
     # offset range (used for real data such as MACS).
     SHIFT_RIDGE = 0,
 
-    # Methods
-    METHODS = c(
-      "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
-      "Recorded-Cox", "Recorded-Beran",
-      "MMLM-Correct", "MMLM-Misspecified",
-      "JM-Correct", "JM-Misspecified",
-      "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
-      "Oracle-Cox", "Oracle-Beran"
-    ),
-    METHOD_ORDER = c(
-      "SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
-      "Recorded-Cox", "Recorded-Beran",
-      "MMLM-Correct", "MMLM-Misspecified",
-      "JM-Correct", "JM-Misspecified",
-      "RSF", "DeepSurv", "TimeError-Integrated-Landmark",
-      "Oracle-Cox", "Oracle-Beran"
-    ),
+    # Optional subject-level covariates for the survival layer.  An empty
+    # default keeps the package independent of any application's X columns.
+    SURVIVAL_COVARIATES = character(0),
+
+    # The package defaults contain only SILK method identifiers.  Comparator
+    # rosters (MMLM, JM, RSF, DeepSurv, recorded-age, and oracle methods) are
+    # application/simulation configuration and are intentionally not loaded
+    # by the package.
+    METHODS = c("SILK-Gaussian", "SILK-Laplace", "SILK-Matern32"),
+    METHOD_ORDER = c("SILK-Gaussian", "SILK-Laplace", "SILK-Matern32"),
 
     # Scenario definitions.
     # The primary error SDs 6 and 12 imply age reliabilities of approximately
@@ -294,18 +289,7 @@ silk_default_options <- function() {
     METHOD_LABELS = c(
       "SILK-Gaussian" = "SILK-Gaussian",
       "SILK-Laplace" = "SILK-Laplace",
-      "SILK-Matern32" = "SILK-Matérn-3/2",
-      "Recorded-Cox" = "Recorded-Cox",
-      "Recorded-Beran" = "Recorded-Beran",
-      "MMLM-Correct" = "MMLM-Correct",
-      "MMLM-Misspecified" = "MMLM-Misspecified",
-      "JM-Correct" = "JM-Correct",
-      "JM-Misspecified" = "JM-Misspecified",
-      "RSF" = "RSF",
-      "DeepSurv" = "DeepSurv",
-      "TimeError-Integrated-Landmark" = "TimeError-Integrated-Landmark",
-      "Oracle-Cox" = "Oracle-Cox",
-      "Oracle-Beran" = "Oracle-Beran"
+      "SILK-Matern32" = "SILK-Matérn-3/2"
     ),
 
     SCHEDULE_LABELS = c(

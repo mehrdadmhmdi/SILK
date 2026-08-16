@@ -19,16 +19,13 @@ remotes::install_git("https://github.com/mehrdadmhmdi/SILK.git", dependencies = 
 
 ## Data layout
 
-SILK expects one subject-level table and one longitudinal visit table. The
-subject table must contain `id`, recorded landmark age `A_obs`, follow-up time
-`U`, event indicator `delta`, and the baseline analysis variables `X1`--`X4`.
-The visit table must contain `id`, nominal visit position `visit`, time before
-the landmark `lag`, recorded visit age `A_obs_il`, the same baseline variables,
-and biomarker columns named `B1`, `B2`, and so on.
-
-The package derives the centered nonlinear term `X3^2 - 1` internally for the
-survival layer. Rename or construct these analysis columns before fitting if
-the source dataset uses different names.
+SILK accepts one subject-level table and one longitudinal visit table. For
+backward compatibility, the canonical columns are `id`, `A_obs`, `U`,
+`delta`, `visit`, `lag`, `A_obs_il`, and `B1`, `B2`, .... For an R-ready
+application, use `silk_data_spec()` instead: it maps arbitrary source column
+names, selects the biomarker and survival covariates, and accepts named
+functions for engineered covariates. The package does not assume or create
+`X3^2 - 1`; that feature is created only when the user requests it.
 
 ## Analysis example
 
@@ -41,11 +38,28 @@ train_visits   <- read.csv("train_visits.csv")
 test_subjects  <- read.csv("test_subjects.csv")
 test_visits    <- read.csv("test_visits.csv")
 
+spec <- silk_data_spec(
+  subject_id = "subject_id",
+  recorded_age = "age_recorded",
+  event_time = "follow_up",
+  event = "status",
+  visit_number = "visit_no",
+  visit_age = "age_at_visit",
+  visit_lag = NULL,
+  biomarker_cols = c("cd4", "cd8"),
+  covariate_cols = c("sex", "baseline_age"),
+  engineered_covariates = list(
+    baseline_age_sq = function(data) data[["baseline_age"]]^2 - 1
+  ),
+  template_input_covariates = c("sex", "baseline_age_sq", "lag"),
+  anchor_mode = "intercept"
+)
+
 # Fit the registration once. The shift range is the scientifically plausible
 # range of origin-time offsets in the application.
 registration <- fit_silk_registration(
   train_subjects, train_visits,
-  shift_range = c(-12, 12), seed = 1
+  shift_range = c(-12, 12), seed = 1, data_spec = spec
 )
 
 # Inspect cross-fitted training shifts and profile diagnostics before fitting
@@ -54,7 +68,7 @@ head(registration$train_stage)
 
 fit <- fit_silk(
   train_subjects, train_visits,
-  registration = registration
+  registration = registration, data_spec = spec
 )
 
 # Predict absolute risk at the requested horizons.

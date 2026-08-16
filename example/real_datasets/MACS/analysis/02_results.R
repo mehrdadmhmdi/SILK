@@ -281,8 +281,8 @@ if (file.exists(diagnostics_file)) {
 # ── 4. Plotting setup ───────────────────────────────────────────────────────
 method_colors <- c(
   "Recorded-clock Cox"       = "grey50",
-  "Parametric MMLM-Cox"      = UIUC_ORANGE,
-  "SILK-Cox (Gaussian)"      = UIUC_BLUE
+  "Parametric MMLM-Cox"      = UIUC_BLUE,
+  "SILK-Cox (Gaussian)"      = UIUC_ORANGE
 )
 method_colors <- method_colors[intersect(names(method_colors), unique(metrics$method_label))]
 landmark_facets <- length(unique(metrics$landmark_set)) > 1L

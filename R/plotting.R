@@ -19,18 +19,7 @@ method_palette <- function() {
   method_colours <- c(
     "SILK-Gaussian" = UIUC_ORANGE,
     "SILK-Laplace" = UIUC_ORANGE,
-    "SILK-Matern32" = UIUC_ORANGE,
-    "Recorded-Cox" = "#707372",                      # Storm
-    "Recorded-Beran" = "#8E9090",                    # Storm 60
-    "MMLM-Correct" = "#007E8E",                      # Patina
-    "MMLM-Misspecified" = "#4DB6C2",                 # Patina light
-    "JM-Correct" = "#5C0E41",                        # Berry
-    "JM-Misspecified" = "#A64D79",                   # Berry light
-    "DeepSurv" = "#006230",                          # Prairie
-    "RSF" = "#1D58A7",                               # Industrial
-    "TimeError-Integrated-Landmark" = "#7D3E13",     # Earth
-    "Oracle-Cox" = "#000000",
-    "Oracle-Beran" = UIUC_BLUE
+    "SILK-Matern32" = UIUC_ORANGE
   )
   labels <- pretty_method(METHOD_ORDER)
   stats::setNames(unname(method_colours[METHOD_ORDER]), labels)
@@ -42,11 +31,6 @@ method_linetype_palette <- function() {
   styles <- stats::setNames(rep("solid", length(ids)), ids)
   styles["SILK-Laplace"] <- "dashed"
   styles["SILK-Matern32"] <- "dotted"
-  styles["Recorded-Beran"] <- "dotdash"
-  styles["MMLM-Misspecified"] <- "dashed"
-  styles["JM-Misspecified"] <- "dashed"
-  styles["Oracle-Cox"] <- "longdash"
-  styles["Oracle-Beran"] <- "twodash"
   stats::setNames(unname(styles[ids]), pretty_method(ids))
 }
 
@@ -297,15 +281,14 @@ save_paired_difference_plot <- function(paired, fig_pred_dir, src_dir, phase, se
   UIUC_BLUE <- UIUC_BLUE_HEX
 
   z <- paired[
-    paired$metric %in% c("integrated_brier_score", "mean_auc") &
-      !paired$comparator %in% c("Oracle-Cox", "Oracle-Beran"),
+    paired$metric %in% c("integrated_brier_score", "mean_auc"),
     ,
     drop = FALSE
   ]
+  silk_methods <- grep("^SILK-", METHOD_ORDER, value = TRUE)
   comparator_methods <- setdiff(
     METHOD_ORDER,
-    c("SILK-Gaussian", "SILK-Laplace", "SILK-Matern32",
-      "Oracle-Cox", "Oracle-Beran")
+    silk_methods
   )
   z <- z[z$comparator %in% comparator_methods, , drop = FALSE]
   z <- design_subset(z, phase, setting)
@@ -677,14 +660,14 @@ make_prediction_plots <- function(out_dir) {
       ms, fig_pred_dir, src_dir,
       phase = "primary", setting = "n_train",
       name = "PRED05A_absolute_performance_by_error_scenario_ntrain",
-      subtitle = "Primary Design: Absolute IBS And AUC By Training-Set Size, Including Oracle Models.",
+       subtitle = "Primary Design: Absolute IBS And AUC By Training-Set Size.",
       width = 18, height = 14
     )
     save_absolute_performance_plot(
       ms, fig_pred_dir, src_dir,
       phase = "timepoint_extension", setting = "schedule",
       name = "PRED05B_absolute_performance_by_error_scenario_timepoints",
-      subtitle = "Timepoint Design: N = 400, Absolute IBS And AUC By Visit Schedule, Including Oracle Models.",
+       subtitle = "Timepoint Design: N = 400, Absolute IBS And AUC By Visit Schedule.",
       width = 18, height = 20
     )
   }

@@ -8,9 +8,10 @@ Maintainer: Mehrdad Mohammadi <mohammadi.mehrdad93@gmail.com>
 Description: Implements the SILK (Shift-Invariant Learned Kernel) method for
     absolute risk prediction under common origin-time measurement error. SILK
     registers biomarker trajectories using exact characteristic Gaussian,
-    Laplace, or Matern biomarker kernels and a conditional mean embedding, then calibrates landmark
-    ages for survival prediction. Includes simulation, prediction evaluation,
-    and publication-quality visualization tools.
+    Laplace, or Matern biomarker kernels and a conditional mean embedding,
+    then calibrates landmark ages for survival prediction. Comparator
+    implementations and simulation rosters are maintained by application code
+    that calls SILK.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
@@ -23,16 +24,11 @@ Imports:
     grDevices,
     parallel,
     rlang,
-    nlme,
     ggplot2 (>= 3.4.0),
     grid
 Suggests:
     testthat (>= 3.0.0),
     withr,
-    pkgload,
-    ranger,
-    JMbayes2,
-    survivalmodels,
-    reticulate
+    pkgload
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0

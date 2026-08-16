@@ -57,16 +57,24 @@ resolve_silk_shift_grid <- function(shift_grid = NULL, shift_range = NULL) {
 #' @param seed Integer or NULL. Random seed for folds and multistart fitting.
 #' @param biomarker_kernel Character kernel name: \code{"gaussian"},
 #'   \code{"laplace"}, or \code{"matern32"}. NULL uses the package default.
+#' @param data_spec Optional object from \code{silk_data_spec()} describing
+#'   user column names, biomarker/covariate columns, engineered covariates,
+#'   template inputs, and the shift anchor.
 #' @return A \code{silk_registration} object containing cross-fitted training
 #'   shifts and the final template used for new subjects.
 #' @export
 fit_silk_registration <- function(train_subjects, train_visits,
                                   shift_grid = NULL, shift_range = NULL,
-                                  seed = NULL, biomarker_kernel = NULL) {
+                                  seed = NULL, biomarker_kernel = NULL,
+                                  data_spec = NULL) {
+  inputs <- prepare_silk_inputs(train_subjects, train_visits, data_spec)
+  train_subjects <- inputs$subjects
+  train_visits <- inputs$visits
+  data_spec <- inputs$spec
   grid <- resolve_silk_shift_grid(shift_grid, shift_range)
   crossfit_registration(
     train_visits, train_subjects, grid = grid, seed = seed,
-    biomarker_kernel = biomarker_kernel
+    biomarker_kernel = biomarker_kernel, input_spec = data_spec
   )
 }
 
@@ -76,12 +84,48 @@ fit_silk_registration <- function(train_subjects, train_visits,
 #' @param new_visits Visit data for new subjects.
 #' @param shift_grid Optional candidate grid. By default the fitted grid is
 #'   reused.
+#' @param data_spec Optional data specification. By default the specification
+#'   stored in the fitted registration is reused.
+#' @param new_subjects Optional subject table for new data. Supplying it is
+#'   recommended when visit_lag is derived from the subject-level recorded age.
 #' @return Data frame with estimated shifts and profile-loss diagnostics.
 #' @export
-predict_silk_registration <- function(registration, new_visits, shift_grid = NULL) {
+predict_silk_registration <- function(registration, new_visits, shift_grid = NULL,
+                                      data_spec = NULL, new_subjects = NULL) {
   if (!inherits(registration, "silk_registration") ||
       is.null(registration$final_template)) {
     stop("registration must be a fitted silk_registration object.", call. = FALSE)
+  }
+  data_spec <- if (is.null(data_spec)) registration$input_spec else data_spec
+  if (!is.null(data_spec)) {
+    # Registration prediction needs only the visit table.  A supplied visit_lag
+    # is preferred; otherwise repeated recorded_age values in new_visits allow
+    # the adapter to derive it without a subject table.
+    if (!is.null(new_subjects)) {
+      prepared <- prepare_silk_inputs(new_subjects, new_visits, data_spec)
+    } else if (is.null(data_spec$visit_lag) || !data_spec$visit_lag %in% names(new_visits)) {
+      required_age <- data_spec$recorded_age
+      if (!required_age %in% names(new_visits)) {
+        stop("Supply new_subjects, or include visit_lag/repeated recorded_age in new_visits.", call. = FALSE)
+      }
+      pseudo_subjects <- unique(new_visits[, data_spec$subject_id, drop = FALSE])
+      names(pseudo_subjects) <- data_spec$subject_id
+      pseudo_subjects$.__recorded_age <- new_visits[[data_spec$recorded_age]][
+        match(pseudo_subjects[[data_spec$subject_id]], new_visits[[data_spec$subject_id]])
+      ]
+      data_spec_prediction <- data_spec
+      data_spec_prediction$recorded_age <- ".__recorded_age"
+      new_visits$.__recorded_age <- new_visits[[data_spec$recorded_age]]
+      prepared <- prepare_silk_inputs(pseudo_subjects, new_visits, data_spec_prediction)
+    } else {
+      pseudo_subjects <- data.frame(
+        setNames(list(unique(new_visits[[data_spec$subject_id]])), data_spec$subject_id),
+        check.names = FALSE
+      )
+      pseudo_subjects[[data_spec$recorded_age]] <- 0
+      prepared <- prepare_silk_inputs(pseudo_subjects, new_visits, data_spec)
+    }
+    new_visits <- prepared$visits
   }
   grid <- if (is.null(shift_grid)) registration$grid else {
     value <- sort(unique(as.numeric(shift_grid)))
@@ -127,6 +171,8 @@ validate_silk_registration <- function(registration, train_subjects) {
 #'   reuse exactly the same cross-fitted registration.
 #' @param biomarker_kernel Optional characteristic biomarker kernel used when
 #'   \code{registration} is not supplied.
+#' @param data_spec Optional object from \code{silk_data_spec()} for arbitrary
+#'   user column names and engineered covariates.
 #' @return A fitted SILK model object (list) for use with \code{predict_silk}.
 #' @export
 #' @examples
@@ -136,12 +182,20 @@ validate_silk_registration <- function(registration, train_subjects) {
 #' }
 fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NULL,
                      shift_range = NULL, method = "SILK-Gaussian", registration = NULL,
-                     biomarker_kernel = NULL) {
+                     biomarker_kernel = NULL, data_spec = NULL) {
+  if (is.null(data_spec) && !is.null(registration) &&
+      !is.null(registration$input_spec)) {
+    data_spec <- registration$input_spec
+  }
+  inputs <- prepare_silk_inputs(train_subjects, train_visits, data_spec)
+  train_subjects <- inputs$subjects
+  train_visits <- inputs$visits
+  data_spec <- inputs$spec
   if (is.null(registration)) {
     registration <- fit_silk_registration(
       train_subjects, train_visits,
       shift_grid = shift_grid, shift_range = shift_range, seed = seed,
-      biomarker_kernel = biomarker_kernel
+      biomarker_kernel = biomarker_kernel, data_spec = data_spec
     )
   } else {
     registration <- validate_silk_registration(registration, train_subjects)
@@ -161,7 +215,10 @@ fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NUL
   train_stage <- registration$train_stage$S_hat[
     match(train_subjects$id, registration$train_stage$id)
   ]
-  x <- base_covariates(train_subjects)
+  x <- base_covariates(
+    train_subjects,
+    covariate_cols = if (!is.null(data_spec)) data_spec$covariate_cols else NULL
+  )
   risk_fit <- fit_age_scale_cox(train_subjects, train_stage, x)
   builder <- registration$final_template$biomarker_builder
   list(
@@ -178,108 +235,18 @@ fit_silk <- function(train_subjects, train_visits, shift_grid = NULL, seed = NUL
     registration = registration,
     train_stage = train_stage,
     fit = risk_fit,
+    input_spec = data_spec,
     survival_time_scale = "attained_age",
     implementation = registration$implementation
   )
 }
 
-#' Fit the age-only recorded-age Cox benchmark
-#'
-#' Uses recorded age as the attained-age time coordinate. No baseline
-#' covariate or longitudinal biomarker enters this fit.
-#'
-#' @param train_subjects Data frame of training subjects.
-#' @return Fitted comparator object.
-#' @export
-fit_recorded_cox <- function(train_subjects) {
-  x <- age_only_covariates(train_subjects)
-  list(
-    method = "Recorded-Cox",
-    fit = fit_age_scale_cox(train_subjects, train_subjects$A_obs, x),
-    survival_time_scale = "attained_age",
-    implementation = "attained-age Cox using recorded age only"
-  )
-}
+# Comparator benchmarks are implemented in example/sim codes/R.
 
-#' Predict from the age-only recorded-age Cox benchmark
-#'
-#' @param fit Fitted object from \code{fit_recorded_cox}.
-#' @param test_subjects Data frame of test subjects.
-#' @param horizons Numeric vector of prediction horizons.
-#' @param fold_id Fold identifier.
-#' @param replicate_id Replicate identifier.
-#' @param n_train_setting Training-size label.
-#' @param time_grid_setting Time-grid label.
-#' @return A prediction frame.
-#' @export
-predict_recorded_cox <- function(fit, test_subjects, horizons = NULL,
-                                 fold_id = 1L, replicate_id = 1L,
-                                 n_train_setting = NA,
-                                 time_grid_setting = NA) {
-  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
-  x <- age_only_covariates(test_subjects)
-  risk <- predict_age_scale_cox_risk(fit$fit, test_subjects$A_obs, x, horizons)
-  prediction_frame(
-    test_subjects,
-    landmark = test_subjects$A_obs,
-    horizons = horizons,
-    risk_mat = risk,
-    context = method_context(
-      fit$method, fold_id, replicate_id,
-      n_train_setting, time_grid_setting
-    )
-  )
-}
+# Recorded-age prediction is implemented in example/sim codes/R.
 
-#' Age-only recorded and oracle survival benchmarks
-#'
-#' The recorded methods use recorded age only; the oracle methods use latent
-#' true age only. None of these four methods uses baseline covariates or
-#' longitudinal biomarkers. Oracle methods are simulation-only.
-#'
-#' @param train_subjects Training subject data frame.
-#' @param test_subjects Test subject data frame.
-#' @param fit A fitted object from the corresponding fit function.
-#' @param horizons Positive prediction horizons.
-#' @param fold_id Fold identifier for bookkeeping.
-#' @param replicate_id Replicate identifier for bookkeeping.
-#' @param n_train_setting Training-size label for bookkeeping.
-#' @param time_grid_setting Time-grid label for bookkeeping.
-#' @return A fitted survival-layer object for fit functions, or a standardized
-#' prediction frame for prediction functions.
-#' @name silk_survival_layers
-#' @export
-fit_recorded_beran <- function(train_subjects) {
-  state <- beran_state_covariates(
-    train_subjects, train_subjects$A_obs, include_x = FALSE
-  )
-  list(
-    method = "Recorded-Beran",
-    fit = fit_beran_risk(train_subjects, state),
-    implementation = "Beran estimator using recorded age only"
-  )
-}
-
-#' @rdname silk_survival_layers
-#' @export
-predict_recorded_beran <- function(fit, test_subjects,
-                                   horizons = NULL,
-                                   fold_id = 1L, replicate_id = 1L,
-                                   n_train_setting = NA,
-                                   time_grid_setting = NA) {
-  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
-  state <- beran_state_covariates(
-    test_subjects, test_subjects$A_obs, include_x = FALSE
-  )
-  risk <- predict_beran_risk(fit$fit, state, horizons)
-  prediction_frame(
-    test_subjects,
-    landmark = test_subjects$A_obs,
-    horizons = horizons,
-    risk_mat = risk,
-    context = method_context(fit$method, fold_id, replicate_id, n_train_setting, time_grid_setting)
-  )
-}
+# Recorded-age Beran benchmark and prediction are implemented in
+# example/sim codes/R.
 
 #' Predict risk from a SILK model
 #'
@@ -308,10 +275,19 @@ predict_silk <- function(fit, test_subjects, test_visits,
                          n_train_setting = NA,
                          time_grid_setting = NA) {
   if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
+  data_spec <- fit$input_spec
+  prepared <- if (is.null(data_spec)) {
+    list(subjects = test_subjects, visits = test_visits)
+  } else prepare_silk_inputs(test_subjects, test_visits, data_spec)
+  test_subjects <- prepared$subjects
+  test_visits <- prepared$visits
   pred_shift <- predict_registration_shift(fit$registration$final_template, test_visits, fit$grid)
   stage <- test_subjects$A_obs[match(pred_shift$id, test_subjects$id)] - pred_shift$e_hat
   stage <- stage[match(test_subjects$id, pred_shift$id)]
-  x <- base_covariates(test_subjects)
+  x <- base_covariates(
+    test_subjects,
+    covariate_cols = if (!is.null(data_spec)) data_spec$covariate_cols else NULL
+  )
   risk <- predict_age_scale_cox_risk(fit$fit, stage, x, horizons)
   prediction_frame(
     test_subjects,
@@ -325,73 +301,5 @@ predict_silk <- function(fit, test_subjects, test_visits,
   )
 }
 
-#' @rdname silk_survival_layers
-#' @export
-fit_oracle_cox <- function(train_subjects) {
-  x <- age_only_covariates(train_subjects)
-  fit <- fit_age_scale_cox(train_subjects, train_subjects$A_star, x)
-  list(
-    method = "Oracle-Cox",
-    fit = fit,
-    survival_time_scale = "attained_age",
-    implementation = "attained-age Cox using latent age only"
-  )
-}
-
-#' @rdname silk_survival_layers
-#' @export
-fit_oracle_beran <- function(train_subjects) {
-  state <- beran_state_covariates(
-    train_subjects, train_subjects$A_star, include_x = FALSE
-  )
-  list(
-    method = "Oracle-Beran",
-    fit = fit_beran_risk(train_subjects, state),
-    implementation = "Beran estimator using latent age only"
-  )
-}
-
-#' @rdname silk_survival_layers
-#' @export
-predict_oracle_cox <- function(fit, test_subjects, horizons = NULL,
-                               fold_id = 1L, replicate_id = 1L,
-                               n_train_setting = NA,
-                               time_grid_setting = NA) {
-  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
-  x <- age_only_covariates(test_subjects)
-  risk <- predict_age_scale_cox_risk(fit$fit, test_subjects$A_star, x, horizons)
-  prediction_frame(
-    test_subjects,
-    landmark = test_subjects$A_star,
-    horizons = horizons,
-    risk_mat = risk,
-    context = method_context(
-      fit$method, fold_id, replicate_id,
-      n_train_setting, time_grid_setting
-    )
-  )
-}
-
-#' @rdname silk_survival_layers
-#' @export
-predict_oracle_beran <- function(fit, test_subjects,
-                                 horizons = NULL,
-                                 fold_id = 1L, replicate_id = 1L,
-                                 n_train_setting = NA,
-                                 time_grid_setting = NA) {
-  if (is.null(horizons)) horizons <- silk_opt("PREDICTION_HORIZONS")
-  state <- beran_state_covariates(
-    test_subjects, test_subjects$A_star, include_x = FALSE
-  )
-  risk <- predict_beran_risk(fit$fit, state, horizons)
-  prediction_frame(
-    test_subjects,
-    landmark = test_subjects$A_star,
-    horizons = horizons,
-    risk_mat = risk,
-    context = method_context(
-      fit$method, fold_id, replicate_id,
-      n_train_setting, time_grid_setting
-    )
-  )
-}
+# Oracle benchmarks are simulation-only and implemented in
+# example/sim codes/R/methods_survival_benchmarks.R.

@@ -51,13 +51,11 @@ testthat::test_that("misspecified marker differences remove subject-level offset
   )
 })
 
-testthat::test_that("method labels remain unchanged", {
-  expected <- c("MMLM-Misspecified", "JM-Misspecified")
-  testthat::expect_true(all(expected %in% silk_default_options()$METHODS))
-  testthat::expect_identical(
-    silk_default_options()$METHODS[match(expected, silk_default_options()$METHODS)],
-    expected
-  )
+testthat::test_that("comparator labels are owned by the simulation layer", {
+  testthat::expect_false(any(grepl(
+    "MMLM|JM|RSF|DeepSurv|Oracle|Recorded",
+    silk_default_options()$METHODS
+  )))
 })
 
 testthat::test_that("misspecified MMLM uses a finite ridge event model", {

@@ -424,9 +424,9 @@ scenario_schedule <- function(scenario_name, fallback = PRIMARY_SCHEDULE) {
   sch
 }
 
-# The installed package is the single source of truth for data generation,
-# registration, SILK survival layers, and evaluation. Mirror the simulation's
-# environment-controlled design into package options once, before tasks run.
+# The installed package supplies SILK itself.  This simulation configuration
+# owns the data-generating process, comparator roster, and reporting labels;
+# those application-specific methods are not package defaults.
 registration_cores <- Sys.getenv("SILK_N_CORES", unset = "auto")
 if (grepl("^[0-9]+$", registration_cores)) {
   registration_cores <- as.integer(registration_cores)
@@ -512,6 +512,20 @@ silk_options(
   SCENARIO_LABELS = SCENARIO_LABELS,
   METHOD_LABELS = METHOD_LABELS,
   SCHEDULE_LABELS = SCHEDULE_LABELS
+)
+
+# The simulation owns its data-generating covariates. They are supplied to the
+# standalone SILK package explicitly rather than being package defaults.
+SILK_DATA_SPEC <- silk_data_spec(
+  biomarker_cols = NULL,
+  covariate_cols = c("X1", "X2", "X3", "X4", "X3_sq"),
+  engineered_covariates = list(
+    X3_sq = function(data) as.numeric(data[["X3"]])^2 - 1
+  ),
+  template_input_covariates = c("X1", "X2", "X3", "X4", "lag"),
+  clock_covariates = c("X1", "X2", "X3", "X4", "X3_sq"),
+  anchor_covariates = "X1",
+  anchor_mode = ANCHOR_MODE
 )
 
 # ----------------------------- Task plan -------------------------------------

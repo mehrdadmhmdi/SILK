@@ -154,8 +154,17 @@ median_distance_bandwidth <- function(x, max_points = NULL) {
 }
 
 #' @keywords internal
-make_biomarker_kernel_builder <- function(visits_df, biomarker_kernel = NULL) {
-  columns <- bio_columns(visits_df)
+make_biomarker_kernel_builder <- function(visits_df, biomarker_kernel = NULL,
+                                          biomarker_cols = NULL) {
+  columns <- if (is.null(biomarker_cols)) bio_columns(visits_df) else {
+    biomarker_cols <- unique(as.character(biomarker_cols))
+    missing <- setdiff(biomarker_cols, names(visits_df))
+    if (length(missing)) {
+      stop("Missing biomarker columns: ", paste(missing, collapse = ", "), call. = FALSE)
+    }
+    if (!length(biomarker_cols)) stop("biomarker_cols must not be empty.", call. = FALSE)
+    biomarker_cols
+  }
   biomarkers <- as.matrix(visits_df[, columns, drop = FALSE])
   scaler <- make_scaler(biomarkers)
   standardized <- apply_scaler(biomarkers, scaler)
@@ -279,8 +288,10 @@ with_preserved_seed <- function(seed, expr) {
 }
 
 #' @keywords internal
-template_covariate_bandwidth <- function(name) {
-  value <- switch(
+template_covariate_bandwidth <- function(name, bandwidths = NULL) {
+  value <- if (!is.null(bandwidths) && name %in% names(bandwidths)) {
+    bandwidths[[name]]
+  } else switch(
     name,
     X1 = silk_opt("H_X_BANDWIDTH"),
     X2 = silk_opt("H_X2_BANDWIDTH"),
@@ -297,17 +308,25 @@ template_covariate_bandwidth <- function(name) {
 }
 
 #' @keywords internal
-make_input_kernel_builder <- function(visits_df) {
+make_input_kernel_builder <- function(visits_df, input_spec = NULL) {
   dimension <- suppressWarnings(as.integer(silk_opt("TEMPLATE_INPUT_FEATURES"))[1L])
   if (!is.finite(dimension) || dimension < 2L || dimension %% 2L != 0L) {
     stop("TEMPLATE_INPUT_FEATURES must be an even integer of at least two.", call. = FALSE)
   }
-  requested <- as.character(silk_opt("TEMPLATE_INPUT_COVARIATES"))
+  requested <- if (!is.null(input_spec) && !is.null(input_spec$template_input_covariates)) {
+    as.character(input_spec$template_input_covariates)
+  } else as.character(silk_opt("TEMPLATE_INPUT_COVARIATES"))
   covariates <- intersect(requested, names(visits_df))
+  bandwidth_overrides <- if (!is.null(input_spec)) input_spec$template_input_bandwidths else NULL
   input_names <- c("candidate_age", covariates)
   bandwidths <- c(
-    candidate_age = as.numeric(silk_opt("H_A_BANDWIDTH"))[1L],
-    stats::setNames(vapply(covariates, template_covariate_bandwidth, numeric(1)), covariates)
+    candidate_age = if (!is.null(bandwidth_overrides) && "candidate_age" %in% names(bandwidth_overrides)) {
+      as.numeric(bandwidth_overrides[["candidate_age"]])[1L]
+    } else as.numeric(silk_opt("H_A_BANDWIDTH"))[1L],
+    stats::setNames(vapply(
+      covariates, template_covariate_bandwidth, numeric(1),
+      bandwidths = bandwidth_overrides
+    ), covariates)
   )
   if (any(!is.finite(bandwidths)) || any(bandwidths <= 0)) {
     stop("All template-input bandwidths must be positive and finite.", call. = FALSE)
@@ -434,7 +453,7 @@ silk_parallel_lapply <- function(X, FUN, ...) {
 # ----------------------------- Anchor helpers -------------------------------
 
 #' @keywords internal
-anchor_basis <- function(subjects, ids, mode = NULL) {
+anchor_basis <- function(subjects, ids, mode = NULL, anchor_covariates = NULL) {
   if (is.null(mode)) mode <- silk_opt("ANCHOR_MODE")
   matched <- subjects[match(ids, subjects$id), , drop = FALSE]
   if (anyNA(matched$id)) stop("Registration ids are missing from subjects.", call. = FALSE)
@@ -443,12 +462,22 @@ anchor_basis <- function(subjects, ids, mode = NULL) {
     colnames(basis) <- "intercept"
     return(basis)
   }
-  if (!"X1" %in% names(matched)) {
-    stop("ANCHOR_MODE='rx' requires subject-level X1.", call. = FALSE)
+  if (is.null(anchor_covariates)) anchor_covariates <- "X1"
+  anchor_covariates <- unique(as.character(anchor_covariates))
+  missing <- setdiff(anchor_covariates, names(matched))
+  if (length(missing)) {
+    stop("Anchor covariates are missing from subjects: ", paste(missing, collapse = ", "), call. = FALSE)
   }
-  x1 <- as.numeric(scale(matched$X1))
-  x1[!is.finite(x1)] <- 0
-  cbind(intercept = 1, X1 = x1)
+  out <- matrix(1, nrow = nrow(matched), ncol = 1L,
+                dimnames = list(NULL, "intercept"))
+  for (nm in anchor_covariates) {
+    value <- as.numeric(matched[[nm]])
+    value <- as.numeric(scale(value))
+    value[!is.finite(value)] <- 0
+    out <- cbind(out, value)
+    colnames(out)[ncol(out)] <- nm
+  }
+  out
 }
 
 #' @keywords internal
@@ -558,15 +587,19 @@ constrained_grid_update <- function(loss, grid, anchor, center_shift = NULL) {
 # ----------------------------- RKHS template --------------------------------
 
 #' @keywords internal
-prepare_registration_data <- function(visits_df, biomarker_kernel = NULL) {
+prepare_registration_data <- function(visits_df, biomarker_kernel = NULL,
+                                      input_spec = NULL) {
   required <- c("id", "visit", "A_obs_il")
   missing_columns <- setdiff(required, names(visits_df))
   if (length(missing_columns)) {
     stop("Missing visit columns: ", paste(missing_columns, collapse = ", "), call. = FALSE)
   }
-  biomarker_builder <- make_biomarker_kernel_builder(visits_df, biomarker_kernel)
+  biomarker_builder <- make_biomarker_kernel_builder(
+    visits_df, biomarker_kernel,
+    biomarker_cols = if (!is.null(input_spec)) input_spec$biomarker_cols else NULL
+  )
   standardized <- apply_biomarker_builder(visits_df, biomarker_builder)
-  input_builder <- make_input_kernel_builder(visits_df)
+  input_builder <- make_input_kernel_builder(visits_df, input_spec)
   positions <- sort(unique(visits_df$visit))
   by_position <- stats::setNames(vector("list", length(positions)), as.character(positions))
   for (position in positions) {
@@ -794,7 +827,8 @@ registration_total_objective <- function(template, visits_df, shift, grid_dummy 
 #' @keywords internal
 fit_registration_train <- function(visits_df, subjects, init_e = NULL, grid,
                                    max_iter = NULL, tol = NULL,
-                                   registration_data = NULL) {
+                                   registration_data = NULL,
+                                   input_spec = NULL) {
   if (is.null(max_iter)) max_iter <- silk_opt("N_ALT_ITER_MAX")
   if (is.null(tol)) tol <- silk_opt("ALT_TOL")
   ids <- sort(unique(visits_df$id))
@@ -802,7 +836,11 @@ fit_registration_train <- function(visits_df, subjects, init_e = NULL, grid,
   if (is.null(init_e)) init_e <- rep(0, number_ids)
   if (length(init_e) != number_ids) stop("init_e has the wrong length.", call. = FALSE)
   if (is.null(registration_data)) registration_data <- prepare_registration_data(visits_df)
-  anchor <- anchor_basis(subjects, ids)
+  anchor <- anchor_basis(
+    subjects, ids,
+    mode = if (!is.null(input_spec)) input_spec$anchor_mode else NULL,
+    anchor_covariates = if (!is.null(input_spec)) input_spec$anchor_covariates else NULL
+  )
   shift <- project_to_anchor(as.numeric(init_e), anchor, min(grid), max(grid))
   objective_trace <- numeric(0)
   step <- as.numeric(silk_opt("SHIFT_GRID_STEP"))
@@ -868,9 +906,7 @@ clock_covariate_matrix <- function(visits_df, requested = NULL) {
   columns <- list(`(Intercept)` = rep(1, nrow(visits_df)))
   used <- character(0)
   for (name in requested) {
-    value <- if (identical(name, "X3_sq") && "X3" %in% names(visits_df)) {
-      as.numeric(visits_df$X3)^2 - 1
-    } else if (name %in% names(visits_df)) {
+    value <- if (name %in% names(visits_df)) {
       as.numeric(visits_df[[name]])
     } else {
       NULL
@@ -887,8 +923,9 @@ clock_covariate_matrix <- function(visits_df, requested = NULL) {
 }
 
 #' @keywords internal
-fit_clock_residualizer <- function(visits_df, biomarker_columns) {
-  design <- clock_covariate_matrix(visits_df)
+fit_clock_residualizer <- function(visits_df, biomarker_columns,
+                                   clock_covariates = NULL) {
+  design <- clock_covariate_matrix(visits_df, clock_covariates)
   response <- as.matrix(visits_df[, biomarker_columns, drop = FALSE])
   storage.mode(response) <- "double"
   ridge <- suppressWarnings(as.numeric(silk_opt("CLOCK_RESIDUAL_RIDGE"))[1L])
@@ -1013,9 +1050,15 @@ select_clock_neighbour_count <- function(kernel, response) {
 }
 
 #' @keywords internal
-fit_clock_path_model <- function(visits_df, subjects, biomarker_kernel = NULL) {
-  biomarker_columns <- bio_columns(visits_df)
-  residualizer <- fit_clock_residualizer(visits_df, biomarker_columns)
+fit_clock_path_model <- function(visits_df, subjects, biomarker_kernel = NULL,
+                                 input_spec = NULL) {
+  biomarker_columns <- if (is.null(input_spec) || is.null(input_spec$biomarker_cols)) {
+    bio_columns(visits_df)
+  } else input_spec$biomarker_cols
+  residualizer <- fit_clock_residualizer(
+    visits_df, biomarker_columns,
+    clock_covariates = if (!is.null(input_spec)) input_spec$clock_covariates else NULL
+  )
   residual <- apply_clock_residualizer(visits_df, residualizer)
   builder <- list(
     positions = sort(unique(visits_df$visit)),
@@ -1064,7 +1107,8 @@ predict_clock_path_stage <- function(model, visits_df) {
 
 #' @keywords internal
 biomarker_clock_initial_shift <- function(visits_df, subjects, ids,
-                                          registration_data, grid) {
+                                          registration_data, grid,
+                                          input_spec = NULL) {
   subject_landmark <- subjects$A_obs[match(ids, subjects$id)]
   clock_model <- registration_data$clock_model
   if (!is.null(clock_model)) {
@@ -1080,7 +1124,11 @@ biomarker_clock_initial_shift <- function(visits_df, subjects, ids,
   if (clock_gate_disables(longitudinal_signal)) {
     stage <- subject_landmark
   }
-  anchor <- anchor_basis(subjects, ids)
+  anchor <- anchor_basis(
+    subjects, ids,
+    mode = if (!is.null(input_spec)) input_spec$anchor_mode else NULL,
+    anchor_covariates = if (!is.null(input_spec)) input_spec$anchor_covariates else NULL
+  )
   shift <- project_to_anchor(subject_landmark - stage, anchor, min(grid), max(grid))
   attr(shift, "clock_signal_r2") <- signal_r2
   shift
@@ -1088,14 +1136,21 @@ biomarker_clock_initial_shift <- function(visits_df, subjects, ids,
 
 #' @keywords internal
 fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
-                                        biomarker_kernel = NULL) {
+                                        biomarker_kernel = NULL,
+                                        input_spec = NULL) {
   if (!is.null(seed)) set.seed(seed)
   ids <- sort(unique(visits_df$id))
   number_ids <- length(ids)
-  anchor <- anchor_basis(subjects, ids)
-  registration_data <- prepare_registration_data(visits_df, biomarker_kernel)
+  anchor <- anchor_basis(
+    subjects, ids,
+    mode = if (!is.null(input_spec)) input_spec$anchor_mode else NULL,
+    anchor_covariates = if (!is.null(input_spec)) input_spec$anchor_covariates else NULL
+  )
+  registration_data <- prepare_registration_data(
+    visits_df, biomarker_kernel, input_spec = input_spec
+  )
   registration_data$clock_model <- fit_clock_path_model(
-    visits_df, subjects, biomarker_kernel
+    visits_df, subjects, biomarker_kernel, input_spec = input_spec
   )
   number_starts <- suppressWarnings(as.integer(silk_opt("N_STARTS"))[1L])
   if (!is.finite(number_starts) || number_starts < 1L) number_starts <- 1L
@@ -1103,7 +1158,8 @@ fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
 
   starts <- list(
     biology_clock = biomarker_clock_initial_shift(
-      visits_df, subjects, ids, registration_data, grid
+      visits_df, subjects, ids, registration_data, grid,
+      input_spec = input_spec
     )
   )
   if (number_starts >= 2L) starts$zero <- rep(0, number_ids)
@@ -1129,7 +1185,8 @@ fit_registration_multistart <- function(visits_df, subjects, grid, seed = NULL,
     fit <- tryCatch(
       fit_registration_train(
         visits_df, subjects, starts[[name]], grid,
-        registration_data = registration_data
+        registration_data = registration_data,
+        input_spec = input_spec
       ),
       error = function(e) NULL
     )
@@ -1297,7 +1354,7 @@ predict_registration_shift <- function(template, visits_df, grid) {
 
 #' @keywords internal
 crossfit_registration <- function(train_visits, train_subjects, grid, seed = NULL,
-                                  biomarker_kernel = NULL) {
+                                  biomarker_kernel = NULL, input_spec = NULL) {
   if (!is.null(seed)) set.seed(seed)
   ids <- sort(unique(train_visits$id))
   number_ids <- length(ids)
@@ -1322,7 +1379,8 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
     fit <- fit_registration_multistart(
       fit_visits, fit_subjects, grid,
       seed = if (!is.null(seed)) seed + fold_index else NULL,
-      biomarker_kernel = biomarker_kernel
+      biomarker_kernel = biomarker_kernel,
+      input_spec = input_spec
     )
     list(
       prediction = predict_registration_shift(fit$template, hold_visits, grid),
@@ -1362,7 +1420,8 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
   final_fit <- fit_registration_multistart(
     train_visits, train_subjects, grid,
     seed = if (!is.null(seed)) seed + 777L else NULL,
-    biomarker_kernel = biomarker_kernel
+    biomarker_kernel = biomarker_kernel,
+    input_spec = input_spec
   )
   structure(
     list(
@@ -1373,6 +1432,7 @@ crossfit_registration <- function(train_visits, train_subjects, grid, seed = NUL
       biomarker_kernel = final_fit$template$biomarker_builder$kernel,
       characteristic = TRUE,
       implementation = final_fit$implementation,
+      input_spec = input_spec,
       # Optimization-stability diagnostics promised by the algorithm section.
       multistart = final_fit$multistart,
       fold_multistart = fold_multistart
