@@ -87,17 +87,32 @@ final prediction file if any method fails.
 
 ### Methods compared
 
-1. **SILK-Cox (Gaussian)** — nonparametric multivariate registration of CD4,
-   CD4%, and CD8 histories, followed by residual-time Cox prediction.
-2. **Recorded-clock Cox** — the primary comparator, with the same Cox
-   predictors as SILK-Cox but the recorded rather than calibrated disease
-   clock. This comparison isolates the contribution of registration.
-3. **Parametric MMLM-Cox** — separate linear mixed models smooth the three
-   biomarker histories; their current values enter a residual-time Cox model.
+1. **SILK-Cox (Gaussian)** (`SILK-Cox`) — the SILK package end to end:
+   nonparametric multivariate registration of CD4, CD4%, and CD8 histories
+   (`fit_silk_registration`), then the package's residual-time Cox layer on
+   the calibrated state `g(stage, X1, X2, current B1, B2, B3)` via
+   `fit_silk` / `predict_silk`.
+2. **Recorded-clock Cox** (`Cox-Recorded`) — the primary benchmark: a
+   dynamic-prediction Cox that uses only the recorded time information
+   (which carries the origin error) plus baseline demographics
+   (`stage`, `X1`, `X2`); no biomarker features. At a fixed disease-duration
+   landmark the recorded stage is constant across subjects, so this arm
+   shows exactly what the error-prone clock offers without biomarkers.
+3. **Parametric MMLM-Cox** (`MMLM-Recorded`) — separate linear mixed models
+   smooth the three biomarker histories; their BLUPs at the landmark enter
+   the same residual-time Cox layer on the recorded clock.
+4. **Recorded-clock Cox (same features)** (`Cox-Recorded-SameFeature`,
+   optional; run via `MACS_METHODS`) — the single-channel ablation that
+   shares SILK's full predictor map and differs only in the stage
+   coordinate.
 
-The primary scientific contrast is SILK-Cox versus Recorded-clock Cox.
-MMLM-Cox supplies a focused parametric comparison without adding a collection
-of overlapping joint-model variants.
+The primary scientific contrasts are SILK-Cox versus the time-only
+Recorded-clock Cox (what calibration plus biomarker history buys over the
+error-prone clock) and SILK-Cox versus MMLM-Cox (principled calibration
+versus parametric smoothing). All arms share the SILK package's
+residual-time Cox layer (`fit_residual_cox`) and feature builder
+(`silk_survival_features`); no survival-layer code is duplicated in this
+folder.
 
 ### Primary biomarkers
 
@@ -116,12 +131,27 @@ each landmark.
 
 `macs_comparator_table.csv` contains the complete method comparison.
 `macs_primary_silk_comparison.csv` gives the prespecified SILK-Cox versus
-Recorded-clock Cox contrast; positive AUC and Brier gains favor SILK. Figures
-use Illini Blue (`#13294B`) for SILK-Cox and Illini Orange (`#FF5F05`) for the
-MMLM-Cox comparator. The single-method SILK risk-stratification figure uses
-blue line types only. No age-correction diagnostic is generated.
-Metrics are not averaged across landmark-horizon cells because those cells
-represent different risk sets and prediction tasks.
+time-only Recorded-clock Cox contrast, and `macs_silk_vs_mmlm.csv` the
+SILK-Cox versus MMLM-Cox contrast; positive AUC and Brier gains favor SILK.
+`macs_profile_gap_summary.csv` summarizes the registration diagnostics.
+
+Figures are written to `analysis/figures/` under the names the manuscript
+includes, in both `.png` and `.pdf`:
+
+| File | Content |
+|---|---|
+| `macs_auc_by_horizon` | IPCW time-dependent AUC by horizon, faceted by landmark |
+| `macs_brier_by_horizon` | IPCW Brier score by horizon, faceted by landmark |
+| `macs_calibration` | IPCW calibration at the 5-year horizon by landmark |
+| `macs_km_risk_strata` | AIDS-free survival by SILK-Cox risk tertile |
+| `macs_registration_diagnostics` | Held-out shift distribution and alignment gap |
+
+The AUC and Brier figures show the three primary arms; the same-feature
+ablation is retained in every results CSV and reported in the supplement.
+Figures use Illini Orange (`#FF5F05`) for SILK-Cox and Illini Blue
+(`#13294B`) for the MMLM-Cox comparator. Metrics are not averaged across
+landmark-horizon cells in the figures because those cells represent different
+risk sets and prediction tasks.
 
 ## Notes
 

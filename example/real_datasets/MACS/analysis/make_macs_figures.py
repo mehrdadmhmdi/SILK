@@ -10,7 +10,7 @@ carry the description).
 Usage:
     python3 make_macs_figures.py
 Reads:  results/macs_metrics_per_horizon.csv and macs_predictions.csv
-Writes: figures/fig1..fig4  (.png and .pdf)
+Writes: figures/macs_*  (.png and .pdf), matching the manuscript figure keys
 """
 import os
 try:
@@ -62,26 +62,32 @@ UIUC_BLUE = "#13294B"
 
 # display label -> (color, linestyle, marker)
 STYLE = {
-    "SILK-Cox (Gaussian)":       (UIUC_ORANGE, "-",  "o"),
-    "Parametric MMLM-Cox":       (UIUC_BLUE,   "-.", "^"),
-    "Recorded-clock Cox":        ("#7F7F7F",   (0, (1, 1)), "x"),
+    "SILK-Cox (Gaussian)":                (UIUC_ORANGE, "-",  "o"),
+    "Parametric MMLM-Cox":                (UIUC_BLUE,   "-.", "^"),
+    "Recorded-clock Cox":                 ("#7F7F7F",   (0, (1, 1)), "x"),
+    "Recorded-clock Cox (same features)": ("#B0B0B0",   (0, (3, 1)), "s"),
 }
 ORDER = list(STYLE.keys())
 LSMAP = {  # raw method id -> display label
     "SILK-Cox": "SILK-Cox (Gaussian)",
     "MMLM-Recorded": "Parametric MMLM-Cox",
-    "Cox-Recorded-SameFeature": "Recorded-clock Cox",
+    # Primary benchmark: dynamic-prediction Cox using only the recorded time
+    # information (with origin error) plus baseline demographics.
+    "Cox-Recorded": "Recorded-clock Cox",
+    # Optional single-channel ablation sharing SILK's full predictor map.
+    "Cox-Recorded-SameFeature": "Recorded-clock Cox (same features)",
 }
 FACET_TITLE = {"fixed_1y": "1-year landmark", "fixed_2y": "2-year landmark",
                "fixed_3y": "3-year landmark", "fixed_5y": "5-year landmark"}
 
 
-def _legend_handles():
+def _legend_handles(labels=None):
+    labels = ORDER if labels is None else labels
     return [Line2D([0], [0], color=STYLE[l][0], linestyle=STYLE[l][1],
                    marker=STYLE[l][2], markersize=5.5, linewidth=1.6,
                    markeredgecolor=STYLE[l][0],
                    markerfacecolor="none" if STYLE[l][2] in ("x",) else STYLE[l][0])
-            for l in ORDER]
+            for l in labels]
 
 
 def _load_metrics():
@@ -122,8 +128,10 @@ def _facet_grid(metric, se_col, ylab, outfile, ylim=None):
         ax.set_xlabel("Prediction horizon (years)")
     for ax in (axes[0], axes[2]):
         ax.set_ylabel(ylab)
-    fig.legend(_legend_handles(), ORDER, loc="lower center", ncol=3,
-               frameon=False, bbox_to_anchor=(0.5, -0.06), columnspacing=1.4)
+    present = [lab for lab in ORDER if (m["label"] == lab).any()]
+    fig.legend(_legend_handles(present), present, loc="lower center",
+               ncol=min(3, max(1, len(present))), frameon=False,
+               bbox_to_anchor=(0.5, -0.06), columnspacing=1.4)
     fig.tight_layout(rect=[0, 0.06, 1, 1])
     fig.savefig(os.path.join(FIG, outfile + ".png"))
     fig.savefig(os.path.join(FIG, outfile + ".pdf"))
@@ -132,13 +140,14 @@ def _facet_grid(metric, se_col, ylab, outfile, ylim=None):
 
 
 def fig1_auc():
+    # Y-limits derive from the data so no pooled AUC can fall off the plot.
     _facet_grid("auc_pooled", None, "Time-dependent IPCW AUC",
-                "fig1_auc_by_horizon", ylim=(0.40, 0.90))
+                "macs_auc_by_horizon")
 
 
 def fig2_brier():
     _facet_grid("brier_pooled", None, "IPCW Brier score",
-                "fig2_brier_by_horizon")
+                "macs_brier_by_horizon")
 
 
 def _km_censor(u, d):
@@ -232,21 +241,33 @@ def fig3_calibration():
             ax.set_xlabel("Predicted risk")
         if index % 2 == 0:
             ax.set_ylabel("Observed risk (IPCW)")
-    fig.legend(_legend_handles(), ORDER, loc="lower center", ncol=2,
+    present = [lab for lab in ORDER
+               if any(lab == line.get_label() for ax in visible_axes
+                      for line in ax.lines)]
+    if not present:
+        present = ORDER[:3]
+    fig.legend(_legend_handles(present), present, loc="lower center", ncol=2,
                frameon=False, bbox_to_anchor=(0.5, -0.02), columnspacing=1.4)
     fig.suptitle(f"{h:g}-year risk calibration", fontsize=10, fontweight="bold")
     fig.tight_layout(rect=[0, 0.08, 1, 1])
-    fig.savefig(os.path.join(FIG, "fig3_calibration.png"))
-    fig.savefig(os.path.join(FIG, "fig3_calibration.pdf"))
+    fig.savefig(os.path.join(FIG, "macs_calibration.png"))
+    fig.savefig(os.path.join(FIG, "macs_calibration.pdf"))
     plt.close(fig)
-    print("wrote fig3_calibration")
+    print("wrote macs_calibration")
 
 
 def fig4_km():
-    """KM curves by SILK (Gaussian) 5-year risk tertile at the 3-year landmark."""
+    """KM curves by SILK (Gaussian) 5-year risk tertile at the 5-year landmark.
+
+    The 5-year landmark matches the R renderer (02_results.R) so both
+    pipelines draw the same figure under the same filename.
+    """
     pred = pd.read_csv(os.path.join(RES, "macs_predictions.csv"))
     z = pred[(pred["method"] == "SILK-Cox") & (pred["horizon"] == 5) &
-             (pred["landmark_set"] == "fixed_3y")].copy()
+             (pred["landmark_set"] == "fixed_5y")].copy()
+    if len(z) < 30:
+        z = pred[(pred["method"] == "SILK-Cox") & (pred["horizon"] == 5) &
+                 (pred["landmark_set"] == "fixed_3y")].copy()
     if len(z) < 30:
         z = pred[(pred["method"] == "SILK-Cox") & (pred["horizon"] == 5)].copy()
     if len(z) < 30:
@@ -285,8 +306,8 @@ def fig4_km():
     ax.set_ylabel("AIDS-free survival probability")
     ax.legend(loc="lower left", frameon=False, fontsize=8.5)
     fig.tight_layout()
-    fig.savefig(os.path.join(FIG, "fig4_km_risk_strata.png"))
-    fig.savefig(os.path.join(FIG, "fig4_km_risk_strata.pdf"))
+    fig.savefig(os.path.join(FIG, "macs_km_risk_strata.png"))
+    fig.savefig(os.path.join(FIG, "macs_km_risk_strata.pdf"))
     plt.close(fig)
     print("wrote fig4_km_risk_strata")
 

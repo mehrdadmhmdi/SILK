@@ -94,22 +94,41 @@ silk_options(
   BIOMARKER_KERNEL        = "gaussian",
   BIOMARKER_BANDWIDTH     = "median",
   BIOMARKER_BANDWIDTH_SCALE = 1,
-  SURVIVAL_HISTORY_BIOMARKERS = 3L,
   PROFILE_TEMPERATURE    = 0.015,
   PROFILE_LOCAL_RADIUS   = 0.8,
+  # The held-out profile search follows the manuscript's estimator: argmin of
+  # the cross-fitted RKHS profile loss over the WHOLE candidate grid, with
+  # one-dimensional refinement. No localization window around the
+  # biomarker-clock initializer is applied. (The earlier exploratory run used
+  # a half-year window, which pinned ~88% of held-out shifts to the window
+  # edges and made calibration inert by construction.)
+  PROFILE_SEARCH_RADIUS  = Inf,
   UIUC_ORANGE            = "#FF5F05",
   UIUC_BLUE              = "#13294B",
   FIGURE_DPI             = 600,
   FIGURE_BASE_SIZE       = 14,
+  # Primary benchmark roster: SILK against (i) a dynamic-prediction Cox that
+  # uses only the recorded time information (which carries the origin error)
+  # plus baseline demographics, and (ii) parametric mixed-model landmarking.
+  # "Cox-Recorded-SameFeature" (the single-channel ablation sharing SILK's
+  # full predictor map) remains available through MACS_METHODS.
   METHOD_ORDER = c(
-    "SILK-Cox", "Cox-Recorded-SameFeature", "MMLM-Recorded"
+    "SILK-Cox", "Cox-Recorded", "MMLM-Recorded", "Cox-Recorded-SameFeature"
   ),
   METHOD_LABELS = c(
     "SILK-Cox"                 = "SILK-Cox (Gaussian)",
-    "Cox-Recorded-SameFeature" = "Recorded-clock Cox",
-    "MMLM-Recorded"            = "Parametric MMLM-Cox"
-  )
+    "Cox-Recorded"             = "Recorded-clock Cox",
+    "MMLM-Recorded"            = "Parametric MMLM-Cox",
+    "Cox-Recorded-SameFeature" = "Recorded-clock Cox (same features)"
+  ),
+  METHODS = c("SILK-Cox", "Cox-Recorded", "MMLM-Recorded",
+              "Cox-Recorded-SameFeature")
 )
+
+# The three primary benchmark arms shown in the manuscript's main figures.
+# Cox-Recorded-SameFeature is computed as a supplementary ablation that
+# isolates the calibration channel alone and is reported in the supplement.
+MACS_PRIMARY_FIGURE_METHODS <- c("SILK-Cox", "Cox-Recorded", "MMLM-Recorded")
 
 # ── Real-data registration grid ──────────────────────────────────────────────
 # This is only a candidate search range. It is not an assumed error scenario.
